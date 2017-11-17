@@ -1,2 +1,3 @@
 /input/*
 /result/*
+*.ipynb_checkpoints
