@@ -1,1 +1,0 @@
-floyd run --mode jupyter --cpu --env tensorflow-1.4
