@@ -656,8 +656,6 @@ del data_full['splited_char_list']
 
 from sklearn.preprocessing import normalize
 from sklearn.preprocessing import StandardScaler
-#b = normalize(a, axis=1)
-#c = StandardScaler().fit_transform(a)
 
 f_markov_all_t = np.array(f_markov_all)
 
@@ -668,7 +666,11 @@ for ii in range(end_order - start_order):
     f_markov_tt = np.zeros(f_markov_ii.shape)
     for jj, row in enumerate(f_markov_ii):
         f_markov_tt[jj] = (row - row.min()) / (row.max() - row.min())
-    f_markov_orders_t.append(f_markov_tt)
+    f_markov_tt2 = normalize(f_markov_ii)
+    f_markov_tt3 = StandardScaler().fit_transform(f_markov_ii)
+
+    f_markov_orders_t.append(
+        np.hstack((f_markov_tt, f_markov_tt2, f_markov_tt3)))
 f_markov_orders = np.hstack(f_markov_orders_t)
 
 print(f_markov_orders[:10])
@@ -737,8 +739,8 @@ def sent2vec(sentence):
 sve_train = np.load('../model/sve_train.npy')
 sve_test = np.load('../model/sve_test.npy')
 
-f_sentv = np.concatenate((sve_train, sve_test), axis=0)
-print(f_sentv.shape)
+f_sent2v = np.concatenate((sve_train, sve_test), axis=0)
+print(f_sent2v.shape)
 
 # ### glove
 
@@ -766,16 +768,19 @@ def loadGloveEmbeddings(glove_file):
 # ## Sentiment Analysis based features
 
 
-def nn_model(input_dim, max_len):
+def nn_model(input_dim, embedding_dims, max_len):
     model = Sequential()
     model.add(
-        Embedding(input_dim=input_dim, output_dim=32, input_length=max_len))
+        Embedding(
+            input_dim=input_dim,
+            output_dim=embedding_dims,
+            input_length=max_len))
     model.add(Dropout(0.3))
     model.add(Conv1D(64, 5, padding='valid', activation='relu'))
     model.add(Dropout(0.3))
     model.add(MaxPooling1D())
     model.add(Flatten())
-    model.add(Dense(800, activation='relu'))
+    model.add(Dense(64, activation='relu'))
     model.add(Dropout(0.5))
     model.add(Dense(3, activation='softmax'))
 
@@ -791,50 +796,42 @@ num_words = 10000
 
 tokenizer = Tokenizer(num_words=num_words)
 tokenizer.fit_on_texts(list(data_full.text))
-data_full_seq = tokenizer.texts_to_sequences(data_full.text)
-data_full_pad = pad_sequences(sequences=data_full_seq, maxlen=max_len)
-
-x_train = data_full_pad[np.nonzero(i_train)]
-x_test = data_full_pad[np.nonzero(i_test)]
-y_train_enc = np_utils.to_categorical(y_train)
+f_nn_full_seq = tokenizer.texts_to_sequences(data_full.text)
+f_nn_full_pad = pad_sequences(sequences=f_nn_full_seq, maxlen=max_len)
 
 word_index = tokenizer.word_index
 print('Found %s unique tokens.' % len(word_index))
 
-input_dim = min(num_words, len(word_index)) + 1
+# Sent2vec Neural Network
 
-epochs = 10
-n_splits = 5
 
-earlyStopping = EarlyStopping(
-    monitor='val_loss', patience=2, verbose=0, mode='auto')
+def sent2vec_model():
+    # create a simple 3 layer sequential neural net
+    model = Sequential()
 
-kf = model_selection.KFold(n_splits=n_splits, shuffle=True, random_state=2017)
-cv_scores = []
-pred_full_test = 0
-pred_train = np.zeros([x_train.shape[0], 3])
+    model.add(Dense(128, input_dim=300))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.3))
 
-for idx_dev, idx_val in kf.split(x_train):
-    x_dev, x_val = x_train[idx_dev], x_train[idx_val]
-    y_dev, y_val = y_train_enc[idx_dev], y_train_enc[idx_val]
-    model = nn_model(input_dim, max_len)
-    model.fit(
-        x_dev,
-        y_dev,
-        batch_size=32,
-        validation_data=(x_val, y_val),
-        epochs=epochs,
-        callbacks=[earlyStopping])
-    pred_y_val = model.predict(x_val)
-    pred_y_test = model.predict(x_test)
-    pred_full_test = pred_full_test + pred_y_test
-    pred_train[idx_val, :] = pred_y_val
-    cv_scores.append(metrics.log_loss(y_val, pred_y_val))
-pred_full_test = pred_full_test / float(n_splits)
-print("Mean cv score: {}".format(np.mean(cv_scores)))
+    model.add(Dense(128))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.3))
 
-p_full = np.concatenate((pred_train, pred_full_test), axis=0)
-p_nn = pd.DataFrame(p_full)
+    model.add(Dense(3))
+    model.add(Activation('softmax'))
+
+    # compile the model
+    model.compile(
+        loss='categorical_crossentropy',
+        optimizer='adam',
+        metrics=['accuracy'])
+    return model
+
+
+t_scl_sent2v_nn = StandardScaler()
+f_scl_sent2v_nn = t_scl_sent2v_nn.fit_transform(f_sent2v)
 
 
 # Separate punctuation from words
@@ -868,23 +865,7 @@ def create_docs(df, n_gram_max=2):
     return docs
 
 
-min_count = 2
-maxlen = 256
-
-docs = create_docs(data_full)
-tokenizer = Tokenizer(lower=False, filters='')
-tokenizer.fit_on_texts(docs)
-
-num_words = sum(
-    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
-
-tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
-tokenizer.fit_on_texts(docs)
-docs_seq = tokenizer.texts_to_sequences(docs)
-docs_pad = pad_sequences(sequences=docs_seq, maxlen=maxlen)
-
-
-def fasttext_model(embedding_dims, input_dim, optimizer='adam'):
+def fasttext_model(input_dim, embedding_dims, optimizer='adam'):
     model = Sequential()
     model.add(Embedding(input_dim=input_dim, output_dim=embedding_dims))
     model.add(GlobalAveragePooling1D())
@@ -897,45 +878,20 @@ def fasttext_model(embedding_dims, input_dim, optimizer='adam'):
     return model
 
 
-input_dim = np.max(docs_pad) + 1
-embedding_dims = 20
-epochs = 25
-earlyStopping = EarlyStopping(
-    monitor='val_loss', patience=2, verbose=0, mode='auto')
+min_count = 2
+maxlen = 256
 
-n_splits = 5
+docs = create_docs(data_full)
+tokenizer = Tokenizer(lower=False, filters='')
+tokenizer.fit_on_texts(docs)
 
-kf = model_selection.KFold(n_splits=n_splits, shuffle=True, random_state=2017)
-cv_scores = []
+num_words = sum(
+    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
 
-x_train = docs_pad[np.nonzero(i_train)]
-x_test = docs_pad[np.nonzero(i_test)]
-y_train_enc = np_utils.to_categorical(y_train)
-
-pred_full_test = 0
-pred_train = np.zeros([x_train.shape[0], 3])
-
-for idx_dev, idx_val in kf.split(x_train):
-    x_dev, x_val = x_train[idx_dev], x_train[idx_val]
-    y_dev, y_val = y_train_enc[idx_dev], y_train_enc[idx_val]
-    model = fasttext_model(embedding_dims, input_dim)
-    model.fit(
-        x_dev,
-        y_dev,
-        batch_size=32,
-        validation_data=(x_val, y_val),
-        epochs=epochs,
-        callbacks=[earlyStopping])
-    pred_y_val = model.predict(x_val)
-    pred_y_test = model.predict(x_test)
-    pred_full_test = pred_full_test + pred_y_test
-    pred_train[idx_val, :] = pred_y_val
-    cv_scores.append(metrics.log_loss(y_val, pred_y_val))
-pred_full_test = pred_full_test / float(n_splits)
-print("Mean cv score: {}".format(np.mean(cv_scores)))
-
-p_full = np.concatenate((pred_train, pred_full_test), axis=0)
-p_fasttest = pd.DataFrame(p_full)
+tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
+tokenizer.fit_on_texts(docs)
+f_ft_docs_seq = tokenizer.texts_to_sequences(docs)
+f_ft_docs_pad = pad_sequences(sequences=f_ft_docs_seq, maxlen=maxlen)
 
 # # Ensembling & Stacking models
 
@@ -975,7 +931,54 @@ def apply_model(model, features, evaluate=True, predict=False):
         return pd.DataFrame(p_full)
 
 
-# In[44]:
+def apply_nn_model(model_name, features):
+    assert model_name in ('nn_model', 'sent2vec_model', 'fasttext_model')
+
+    n_splits = 5
+    kf = model_selection.KFold(
+        n_splits=n_splits, shuffle=True, random_state=2017)
+
+    epochs = 25
+    earlyStopping = EarlyStopping(
+        monitor='val_loss', patience=2, verbose=0, mode='auto')
+
+    x_train = features[np.nonzero(i_train)]
+    x_test = features[np.nonzero(i_test)]
+    y_train_enc = np_utils.to_categorical(y_train)
+
+    cv_scores = []
+    pred_full_test = 0
+    pred_train = np.zeros([x_train.shape[0], 3])
+
+    for idx_dev, idx_val in kf.split(x_train):
+        x_dev, x_val = x_train[idx_dev], x_train[idx_val]
+        y_dev, y_val = y_train_enc[idx_dev], y_train_enc[idx_val]
+
+        if model_name is 'nn_model':
+            model = nn_model(input_dim, embedding_dims, max_len)
+        elif model_name is 'sent2vec_model':
+            model = sent2vec_model()
+        elif model_name is 'fasttext_model':
+            model = fasttext_model(input_dim, embedding_dims)
+
+        model.fit(
+            x_dev,
+            y_dev,
+            batch_size=32,
+            validation_data=(x_val, y_val),
+            epochs=epochs,
+            callbacks=[earlyStopping])
+        pred_y_val = model.predict(x_val)
+        pred_y_test = model.predict(x_test)
+        pred_full_test = pred_full_test + pred_y_test
+        pred_train[idx_val, :] = pred_y_val
+        cv_scores.append(metrics.log_loss(y_val, pred_y_val))
+    pred_full_test = pred_full_test / float(n_splits)
+    print("Mean cv score: {}".format(np.mean(cv_scores)))
+
+    p_full = np.concatenate((pred_train, pred_full_test), axis=0)
+    return pd.DataFrame(p_full)
+
 
 # Confusion Matrix
 import itertools
@@ -1022,15 +1025,6 @@ def plot_confusion_matrix(cm,
 
 
 # ## First level Predictions
-
-from sklearn.calibration import CalibratedClassifierCV
-
-apply_model(
-    CalibratedClassifierCV(LogisticRegression(max_iter=10), method="sigmoid"),
-    f_basic)
-apply_model(
-    CalibratedClassifierCV(LogisticRegression(max_iter=10), method="isotonic"),
-    f_basic)
 
 lr_param_grid = {'C': [0.1, 0.3, 1.0, 3.0, 10.0], 'penalty': ['l1', 'l2']}
 
@@ -1412,7 +1406,7 @@ p_lr_markov = apply_model(
     LogisticRegression(), (f_markov_orders, ), predict=True)
 
 # nb model
-p_nb_markov = apply_model(MultinomialNB(), (f_markov_orders, ), predict=True)
+#p_nb_markov = apply_model(MultinomialNB(), (f_markov_orders, ), predict=True)
 
 # rf model
 p_rf_markov = apply_model(
@@ -1429,20 +1423,86 @@ p_et_markov = apply_model(
 # In[55]:
 
 # lr model
-p_lr_sentv = apply_model(LogisticRegression(), (f_sentv, ), predict=True)
+p_lr_sent2v = apply_model(LogisticRegression(), (f_sent2v, ), predict=True)
 
 # nb model
-#p_nb_sentv = apply_model(MultinomialNB(), (f_sentv, ), predict=True)
+#p_nb_sent2v = apply_model(MultinomialNB(), (f_sent2v, ), predict=True)
 
 # rf model
-p_rf_sentv = apply_model(
-    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_sentv, ), predict=True)
+p_rf_sent2v = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_sent2v, ), predict=True)
 
 # et model
-p_et_sentv = apply_model(
-    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_sentv, ), predict=True)
+p_et_sent2v = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_sent2v, ), predict=True)
+
+# nn model
+input_dim = min(num_words, len(word_index)) + 1
+embedding_dims = 32
+p_nn = apply_nn_model('nn_model', f_nn_full_pad)
+
+# sent2vec nn model
+p_sent2v_nn = apply_nn_model('sent2vec_model', f_scl_sent2v_nn)
+
+# fasttext model
+input_dim = np.max(f_ft_docs_pad) + 1
+embedding_dims = 20
+p_fasttext = apply_nn_model('fasttext_model', f_ft_docs_pad)
 
 # ## Second-Level Predictions
+
+f_all_features = f_basic + (
+    f_svd_tfidf, f_scl_svd_tfidf, f_svd_count, f_scl_svd_count, f_svd_tfidf_s,
+    f_scl_svd_tfidf_s, f_svd_count_s, f_scl_svd_count_s, f_svd_tfidf_l,
+    f_scl_svd_tfidf_l, f_svd_count_l, f_scl_svd_count_l, f_svd_tfidf_c,
+    f_scl_svd_tfidf_c, f_svd_count_c, f_scl_svd_count_c, f_markov_orders,
+    f_sent2v, p_lr_basic, p_nb_basic, p_rf_basic, p_et_basic, p_lr_tfidf,
+    p_lr_svd_tfidf, p_lr_scl_svd_tfidf, p_lr_count, p_lr_svd_count,
+    p_lr_scl_svd_count, p_nb_tfidf, p_nb_count, p_rf_tfidf, p_rf_svd_tfidf,
+    p_rf_scl_svd_tfidf, p_rf_count, p_rf_svd_count, p_rf_scl_svd_count,
+    p_et_tfidf, p_et_svd_tfidf, p_et_scl_svd_tfidf, p_et_count, p_et_svd_count,
+    p_et_scl_svd_count, p_lr_tfidf_s, p_lr_svd_tfidf_s, p_lr_scl_svd_tfidf_s,
+    p_lr_count_s, p_lr_svd_count_s, p_lr_scl_svd_count_s, p_nb_tfidf_s,
+    p_nb_count_s, p_rf_tfidf_s, p_rf_svd_tfidf_s, p_rf_scl_svd_tfidf_s,
+    p_rf_count_s, p_rf_svd_count_s, p_rf_scl_svd_count_s, p_et_tfidf_s,
+    p_et_svd_tfidf_s, p_et_scl_svd_tfidf_s, p_et_count_s, p_et_svd_count_s,
+    p_et_scl_svd_count_s, p_lr_tfidf_l, p_lr_svd_tfidf_l, p_lr_scl_svd_tfidf_l,
+    p_lr_count_l, p_lr_svd_count_l, p_lr_scl_svd_count_l, p_nb_tfidf_l,
+    p_nb_count_l, p_rf_tfidf_l, p_rf_svd_tfidf_l, p_rf_scl_svd_tfidf_l,
+    p_rf_count_l, p_rf_svd_count_l, p_rf_scl_svd_count_l, p_et_tfidf_l,
+    p_et_svd_tfidf_l, p_et_scl_svd_tfidf_l, p_et_count_l, p_et_svd_count_l,
+    p_et_scl_svd_count_l, p_lr_tfidf_c, p_lr_svd_tfidf_c, p_lr_scl_svd_tfidf_c,
+    p_lr_count_c, p_lr_svd_count_c, p_lr_scl_svd_count_c, p_nb_tfidf_c,
+    p_nb_count_c, p_rf_tfidf_c, p_rf_svd_tfidf_c, p_rf_scl_svd_tfidf_c,
+    p_rf_count_c, p_rf_svd_count_c, p_rf_scl_svd_count_c, p_et_tfidf_c,
+    p_et_svd_tfidf_c, p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c,
+    p_et_scl_svd_count_c, p_lr_markov, p_rf_markov, p_et_markov, p_lr_sent2v,
+    p_lr_sent2v, p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext)
+
+# non-negative
+f_all_features2 = f_basic + (
+    p_lr_basic, p_nb_basic, p_rf_basic, p_et_basic, p_lr_tfidf, p_lr_svd_tfidf,
+    p_lr_scl_svd_tfidf, p_lr_count, p_lr_svd_count, p_lr_scl_svd_count,
+    p_nb_tfidf, p_nb_count, p_rf_tfidf, p_rf_svd_tfidf, p_rf_scl_svd_tfidf,
+    p_rf_count, p_rf_svd_count, p_rf_scl_svd_count, p_et_tfidf, p_et_svd_tfidf,
+    p_et_scl_svd_tfidf, p_et_count, p_et_svd_count, p_et_scl_svd_count,
+    p_lr_tfidf_s, p_lr_svd_tfidf_s, p_lr_scl_svd_tfidf_s, p_lr_count_s,
+    p_lr_svd_count_s, p_lr_scl_svd_count_s, p_nb_tfidf_s, p_nb_count_s,
+    p_rf_tfidf_s, p_rf_svd_tfidf_s, p_rf_scl_svd_tfidf_s, p_rf_count_s,
+    p_rf_svd_count_s, p_rf_scl_svd_count_s, p_et_tfidf_s, p_et_svd_tfidf_s,
+    p_et_scl_svd_tfidf_s, p_et_count_s, p_et_svd_count_s, p_et_scl_svd_count_s,
+    p_lr_tfidf_l, p_lr_svd_tfidf_l, p_lr_scl_svd_tfidf_l, p_lr_count_l,
+    p_lr_svd_count_l, p_lr_scl_svd_count_l, p_nb_tfidf_l, p_nb_count_l,
+    p_rf_tfidf_l, p_rf_svd_tfidf_l, p_rf_scl_svd_tfidf_l, p_rf_count_l,
+    p_rf_svd_count_l, p_rf_scl_svd_count_l, p_et_tfidf_l, p_et_svd_tfidf_l,
+    p_et_scl_svd_tfidf_l, p_et_count_l, p_et_svd_count_l, p_et_scl_svd_count_l,
+    p_lr_tfidf_c, p_lr_svd_tfidf_c, p_lr_scl_svd_tfidf_c, p_lr_count_c,
+    p_lr_svd_count_c, p_lr_scl_svd_count_c, p_nb_tfidf_c, p_nb_count_c,
+    p_rf_tfidf_c, p_rf_svd_tfidf_c, p_rf_scl_svd_tfidf_c, p_rf_count_c,
+    p_rf_svd_count_c, p_rf_scl_svd_count_c, p_et_tfidf_c, p_et_svd_tfidf_c,
+    p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c, p_et_scl_svd_count_c,
+    p_lr_markov, p_rf_markov, p_et_markov, p_lr_sent2v, p_lr_sent2v,
+    p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext)
 
 p_xgb_all = apply_model(
     xgb.XGBClassifier(
@@ -1457,36 +1517,45 @@ p_xgb_all = apply_model(
         silent=1,
         objective='multi:softprob',
         seed=2017),
-    f_basic +
-    (f_svd_tfidf, f_scl_svd_tfidf, f_svd_count, f_scl_svd_count, f_svd_tfidf_s,
-     f_scl_svd_tfidf_s, f_svd_count_s, f_scl_svd_count_s, f_svd_tfidf_l,
-     f_scl_svd_tfidf_l, f_svd_count_l, f_scl_svd_count_l, f_svd_tfidf_c,
-     f_scl_svd_tfidf_c, f_svd_count_c, f_scl_svd_count_c, f_markov_orders,
-     f_sentv, p_lr_basic, p_nb_basic, p_rf_basic, p_et_basic, p_lr_tfidf,
-     p_lr_svd_tfidf, p_lr_scl_svd_tfidf, p_lr_count, p_lr_svd_count,
-     p_lr_scl_svd_count, p_nb_tfidf, p_nb_count, p_rf_tfidf, p_rf_svd_tfidf,
-     p_rf_scl_svd_tfidf, p_rf_count, p_rf_svd_count, p_rf_scl_svd_count,
-     p_et_tfidf, p_et_svd_tfidf, p_et_scl_svd_tfidf, p_et_count,
-     p_et_svd_count, p_et_scl_svd_count, p_lr_tfidf_s, p_lr_svd_tfidf_s,
-     p_lr_scl_svd_tfidf_s, p_lr_count_s, p_lr_svd_count_s,
-     p_lr_scl_svd_count_s, p_nb_tfidf_s, p_nb_count_s, p_rf_tfidf_s,
-     p_rf_svd_tfidf_s, p_rf_scl_svd_tfidf_s, p_rf_count_s, p_rf_svd_count_s,
-     p_rf_scl_svd_count_s, p_et_tfidf_s, p_et_svd_tfidf_s,
-     p_et_scl_svd_tfidf_s, p_et_count_s, p_et_svd_count_s,
-     p_et_scl_svd_count_s, p_lr_tfidf_l, p_lr_svd_tfidf_l,
-     p_lr_scl_svd_tfidf_l, p_lr_count_l, p_lr_svd_count_l,
-     p_lr_scl_svd_count_l, p_nb_tfidf_l, p_nb_count_l, p_rf_tfidf_l,
-     p_rf_svd_tfidf_l, p_rf_scl_svd_tfidf_l, p_rf_count_l, p_rf_svd_count_l,
-     p_rf_scl_svd_count_l, p_et_tfidf_l, p_et_svd_tfidf_l,
-     p_et_scl_svd_tfidf_l, p_et_count_l, p_et_svd_count_l,
-     p_et_scl_svd_count_l, p_lr_tfidf_c, p_lr_svd_tfidf_c,
-     p_lr_scl_svd_tfidf_c, p_lr_count_c, p_lr_svd_count_c,
-     p_lr_scl_svd_count_c, p_nb_tfidf_c, p_nb_count_c, p_rf_tfidf_c,
-     p_rf_svd_tfidf_c, p_rf_scl_svd_tfidf_c, p_rf_count_c, p_rf_svd_count_c,
-     p_rf_scl_svd_count_c, p_et_tfidf_c, p_et_svd_tfidf_c,
-     p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c,
-     p_et_scl_svd_count_c, p_lr_markov, p_nb_markov, p_rf_markov, p_et_markov,
-     p_lr_sentv, p_lr_sentv, p_lr_sentv, p_fasttest, p_nn),
+    f_all_features,
+    predict=True)
+
+p_lr_all = apply_model(
+    CalibratedClassifierCV(LogisticRegression(max_iter=10), method="isotonic"),
+    f_all_features,
+    predict=True)
+p_nb_all = apply_model(
+    CalibratedClassifierCV(MultinomialNB(), method="isotonic"),
+    f_all_features2,
+    predict=True)
+p_rf_all = apply_model(
+    CalibratedClassifierCV(
+        RandomForestClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
+        method="isotonic"),
+    f_all_features,
+    predict=True)
+p_et_all = apply_model(
+    CalibratedClassifierCV(
+        ExtraTreesClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
+        method="isotonic"),
+    f_all_features,
+    predict=True)
+
+print('p_xgb_all_all')
+
+p_xgb_all_all = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (p_xgb_all, p_lr_all, p_nb_all, p_rf_all, p_et_all),
     predict=True)
 
 import os.path
@@ -1503,4 +1572,4 @@ def make_submission(predictions, submission_path, file_name):
             file_name, index=False)
 
 
-make_submission(p_xgb_all, '../result', "p_xgb_all-20171208-03.csv")
+make_submission(p_xgb_all_all, '../result', "p_xgb_all-20171209-03.csv")
