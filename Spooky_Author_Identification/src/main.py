@@ -685,15 +685,14 @@ print(f_markov_orders[:10])
 # ### word2vec
 
 # Load Google's pre-trained Word2Vec model.
-#word2vec = gensim.models.KeyedVectors.load_word2vec_format('../model/GoogleNews-vectors-negative300.bin', binary=True)
-
-# In[38]:
-
-stopwords = nltk.corpus.stopwords.words('english')
-tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
+word2vec = gensim.models.KeyedVectors.load_word2vec_format(
+    '../model/GoogleNews-vectors-negative300.bin', binary=True)
 
 
 def sent2vec(sentence):
+    stopwords = nltk.corpus.stopwords.words('english')
+    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
+
     text_list = tokenizer.tokenize(sentence.lower())
     text_list = [w for w in text_list if w not in stopwords]
     text_list = [w for w in text_list if w.isalpha()]
@@ -711,40 +710,17 @@ def sent2vec(sentence):
     return v / np.sqrt((v**2).sum())
 
 
-# In[39]:
+sent2v = [sent2vec(x) for x in data_full.text]
+f_sent2v = np.array(sent2v)
+print(f_sent2v[0])
 
-#start = time.time()
-#
-#train_text = train.text.values
-#test_text = test.text.values
-#sentvec_train = [sent2vec(x) for x in train_text]
-#sentvec_test = [sent2vec(x) for x in test_text]
-#
-#sve_train = np.array(sentvec_train)
-#sve_test = np.array(sentvec_test)
-#
-#print(sve_train.shape, sve_test.shape)
-#
-#end = time.time()
-#print("Time is {}.".format(end - start))
-
-# In[40]:
-
-#sve_train[:10]
-
-# In[41]:
-
-#np.save('../model/sve_train', sve_train)
-#np.save('../model/sve_test', sve_test)
 sve_train = np.load('../model/sve_train.npy')
 sve_test = np.load('../model/sve_test.npy')
 
-f_sent2v = np.concatenate((sve_train, sve_test), axis=0)
-print(f_sent2v.shape)
+f_sent2v_t = np.concatenate((sve_train, sve_test), axis=0)
+print(f_sent2v_t[0])
 
 # ### glove
-
-# In[42]:
 
 glove_file = '../glove/glove.840B.300d.txt'
 
@@ -780,7 +756,7 @@ def nn_model(input_dim, embedding_dims, max_len):
     model.add(Dropout(0.3))
     model.add(MaxPooling1D())
     model.add(Flatten())
-    model.add(Dense(64, activation='relu'))
+    model.add(Dense(800, activation='relu'))
     model.add(Dropout(0.5))
     model.add(Dense(3, activation='softmax'))
 
@@ -879,7 +855,7 @@ def fasttext_model(input_dim, embedding_dims, optimizer='adam'):
 
 
 min_count = 2
-maxlen = 256
+max_len = 85
 
 docs = create_docs(data_full)
 tokenizer = Tokenizer(lower=False, filters='')
@@ -891,7 +867,154 @@ num_words = sum(
 tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
 tokenizer.fit_on_texts(docs)
 f_ft_docs_seq = tokenizer.texts_to_sequences(docs)
-f_ft_docs_pad = pad_sequences(sequences=f_ft_docs_seq, maxlen=maxlen)
+f_ft_docs_pad = pad_sequences(sequences=f_ft_docs_seq, maxlen=max_len)
+
+# Word2vec Neural Network
+
+
+# preprocessing
+def text_preprocess(sentence):
+    stopwords = nltk.corpus.stopwords.words('english')
+    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
+
+    text_list = tokenizer.tokenize(sentence.lower())
+    text_list = [w for w in text_list if w not in stopwords]
+    text_list = [w for w in text_list if w.isalpha()]
+    txt = " ".join([w for w in text_list])
+
+    return txt
+
+
+min_count = 2
+max_len = 20  # preprocess mean len: 13.023810375
+
+pre_text = [text_preprocess(x) for x in data_full.text]
+tokenizer = Tokenizer(lower=False, filters='')
+tokenizer.fit_on_texts(pre_text)
+
+num_words = sum(
+    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
+
+tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
+tokenizer.fit_on_texts(pre_text)
+f_w2v_text_seq = tokenizer.texts_to_sequences(pre_text)
+f_w2v_text_pad = pad_sequences(sequences=f_w2v_text_seq, maxlen=max_len)
+
+word_index = tokenizer.word_index
+
+# create an embedding matrix for the words we have in the dataset
+embedding_matrix = np.zeros((len(word_index) + 1, 300))
+for word, i in tqdm(word_index.items()):
+    try:
+        embedding_vector = word2vec[word]
+    except:
+        continue
+    if embedding_vector is not None:
+        embedding_matrix[i] = embedding_vector
+
+print(data_full.text[0])
+print(pre_text[0])
+print(f_w2v_text_pad[0])
+print(len(word_index))
+print(word_index['process'])
+print(word2vec['process'])
+print(embedding_matrix[3217])
+
+
+def lstm_model(input_dim, embedding_dims, max_len):
+    model = Sequential()
+    model.add(
+        Embedding(
+            input_dim=input_dim,
+            output_dim=embedding_dims,
+            weights=[embedding_matrix],
+            input_length=max_len,
+            trainable=False))
+    model.add(SpatialDropout1D(0.3))
+    model.add(LSTM(300, dropout=0.3, recurrent_dropout=0.3))
+
+    model.add(Dense(1024))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.8))
+
+    model.add(Dense(1024))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.8))
+
+    model.add(Dense(3))
+    model.add(Activation('softmax'))
+
+    model.compile(
+        loss='categorical_crossentropy',
+        optimizer='adam',
+        metrics=['accuracy'])
+    return model
+
+
+def bi_lstm_model(input_dim, embedding_dims, max_len):
+    model = Sequential()
+    model.add(
+        Embedding(
+            input_dim=input_dim,
+            output_dim=embedding_dims,
+            weights=[embedding_matrix],
+            input_length=max_len,
+            trainable=False))
+    model.add(SpatialDropout1D(0.3))
+    model.add(Bidirectional(LSTM(300, dropout=0.3, recurrent_dropout=0.3)))
+
+    model.add(Dense(1024))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.8))
+
+    model.add(Dense(1024))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.8))
+
+    model.add(Dense(3))
+    model.add(Activation('softmax'))
+
+    model.compile(
+        loss='categorical_crossentropy',
+        optimizer='adam',
+        metrics=['accuracy'])
+    return model
+
+
+def gru_model(input_dim, embedding_dims, max_len):
+    model = Sequential()
+    model.add(
+        Embedding(
+            input_dim=input_dim,
+            output_dim=embedding_dims,
+            weights=[embedding_matrix],
+            input_length=max_len,
+            trainable=False))
+    model.add(SpatialDropout1D(0.3))
+    model.add(GRU(300, dropout=0.3, recurrent_dropout=0.3))
+
+    model.add(Dense(1024))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.8))
+
+    model.add(Dense(1024))
+    model.add(BatchNormalization())
+    model.add(Activation("relu"))
+    model.add(Dropout(0.8))
+
+    model.add(Dense(3))
+    model.add(Activation('softmax'))
+    model.compile(
+        loss='categorical_crossentropy',
+        optimizer='adam',
+        metrics=['accuracy'])
+    return model
+
 
 # # Ensembling & Stacking models
 
@@ -932,13 +1055,14 @@ def apply_model(model, features, evaluate=True, predict=False):
 
 
 def apply_nn_model(model_name, features):
-    assert model_name in ('nn_model', 'sent2vec_model', 'fasttext_model')
+    assert model_name in ('nn_model', 'sent2vec_model', 'fasttext_model',
+                          'lstm_model', 'bi_lstm_model', 'gru_model')
 
     n_splits = 5
     kf = model_selection.KFold(
         n_splits=n_splits, shuffle=True, random_state=2017)
 
-    epochs = 25
+    epochs = 100
     earlyStopping = EarlyStopping(
         monitor='val_loss', patience=2, verbose=0, mode='auto')
 
@@ -960,6 +1084,12 @@ def apply_nn_model(model_name, features):
             model = sent2vec_model()
         elif model_name is 'fasttext_model':
             model = fasttext_model(input_dim, embedding_dims)
+        elif model_name is 'lstm_model':
+            model = lstm_model(input_dim, embedding_dims, max_len)
+        elif model_name is 'bi_lstm_model':
+            model = bi_lstm_model(input_dim, embedding_dims, max_len)
+        elif model_name is 'gru_model':
+            model = gru_model(input_dim, embedding_dims, max_len)
 
         model.fit(
             x_dev,
@@ -979,6 +1109,34 @@ def apply_nn_model(model_name, features):
     p_full = np.concatenate((pred_train, pred_full_test), axis=0)
     return pd.DataFrame(p_full)
 
+
+# lstm model
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 20
+p_w2v_lstm = apply_nn_model('lstm_model', f_w2v_text_pad)
+
+p_w2v_lstm.to_pickle('../model/p_w2v_lstm.pkl')
+#p_w2v_lstm = pd.read_pickle('../model/p_w2v_lstm.pkl')
+
+# bi lstm model
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 20
+p_w2v_bi_lstm = apply_nn_model('bi_lstm_model', f_w2v_text_pad)
+
+p_w2v_bi_lstm.to_pickle('../model/p_w2v_bi_lstm.pkl')
+#p_w2v_bi_lstm = pd.read_pickle('../model/p_w2v_bi_lstm.pkl')
+
+# gru model
+
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 20
+p_w2v_gru = apply_nn_model('gru_model', f_w2v_text_pad)
+
+p_w2v_gru.to_pickle('../model/p_w2v_gru.pkl')
+#p_w2v_gru = pd.read_pickle('../model/p_w2v_gru.pkl')
 
 # Confusion Matrix
 import itertools
@@ -1439,6 +1597,7 @@ p_et_sent2v = apply_model(
 # nn model
 input_dim = min(num_words, len(word_index)) + 1
 embedding_dims = 32
+max_len = 35
 p_nn = apply_nn_model('nn_model', f_nn_full_pad)
 
 # sent2vec nn model
@@ -1451,36 +1610,8 @@ p_fasttext = apply_nn_model('fasttext_model', f_ft_docs_pad)
 
 # ## Second-Level Predictions
 
-f_all_features = f_basic + (
-    f_svd_tfidf, f_scl_svd_tfidf, f_svd_count, f_scl_svd_count, f_svd_tfidf_s,
-    f_scl_svd_tfidf_s, f_svd_count_s, f_scl_svd_count_s, f_svd_tfidf_l,
-    f_scl_svd_tfidf_l, f_svd_count_l, f_scl_svd_count_l, f_svd_tfidf_c,
-    f_scl_svd_tfidf_c, f_svd_count_c, f_scl_svd_count_c, f_markov_orders,
-    f_sent2v, p_lr_basic, p_nb_basic, p_rf_basic, p_et_basic, p_lr_tfidf,
-    p_lr_svd_tfidf, p_lr_scl_svd_tfidf, p_lr_count, p_lr_svd_count,
-    p_lr_scl_svd_count, p_nb_tfidf, p_nb_count, p_rf_tfidf, p_rf_svd_tfidf,
-    p_rf_scl_svd_tfidf, p_rf_count, p_rf_svd_count, p_rf_scl_svd_count,
-    p_et_tfidf, p_et_svd_tfidf, p_et_scl_svd_tfidf, p_et_count, p_et_svd_count,
-    p_et_scl_svd_count, p_lr_tfidf_s, p_lr_svd_tfidf_s, p_lr_scl_svd_tfidf_s,
-    p_lr_count_s, p_lr_svd_count_s, p_lr_scl_svd_count_s, p_nb_tfidf_s,
-    p_nb_count_s, p_rf_tfidf_s, p_rf_svd_tfidf_s, p_rf_scl_svd_tfidf_s,
-    p_rf_count_s, p_rf_svd_count_s, p_rf_scl_svd_count_s, p_et_tfidf_s,
-    p_et_svd_tfidf_s, p_et_scl_svd_tfidf_s, p_et_count_s, p_et_svd_count_s,
-    p_et_scl_svd_count_s, p_lr_tfidf_l, p_lr_svd_tfidf_l, p_lr_scl_svd_tfidf_l,
-    p_lr_count_l, p_lr_svd_count_l, p_lr_scl_svd_count_l, p_nb_tfidf_l,
-    p_nb_count_l, p_rf_tfidf_l, p_rf_svd_tfidf_l, p_rf_scl_svd_tfidf_l,
-    p_rf_count_l, p_rf_svd_count_l, p_rf_scl_svd_count_l, p_et_tfidf_l,
-    p_et_svd_tfidf_l, p_et_scl_svd_tfidf_l, p_et_count_l, p_et_svd_count_l,
-    p_et_scl_svd_count_l, p_lr_tfidf_c, p_lr_svd_tfidf_c, p_lr_scl_svd_tfidf_c,
-    p_lr_count_c, p_lr_svd_count_c, p_lr_scl_svd_count_c, p_nb_tfidf_c,
-    p_nb_count_c, p_rf_tfidf_c, p_rf_svd_tfidf_c, p_rf_scl_svd_tfidf_c,
-    p_rf_count_c, p_rf_svd_count_c, p_rf_scl_svd_count_c, p_et_tfidf_c,
-    p_et_svd_tfidf_c, p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c,
-    p_et_scl_svd_count_c, p_lr_markov, p_rf_markov, p_et_markov, p_lr_sent2v,
-    p_lr_sent2v, p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext)
-
 # non-negative
-f_all_features2 = f_basic + (
+f_all_nne_features = f_basic + (
     p_lr_basic, p_nb_basic, p_rf_basic, p_et_basic, p_lr_tfidf, p_lr_svd_tfidf,
     p_lr_scl_svd_tfidf, p_lr_count, p_lr_svd_count, p_lr_scl_svd_count,
     p_nb_tfidf, p_nb_count, p_rf_tfidf, p_rf_svd_tfidf, p_rf_scl_svd_tfidf,
@@ -1502,7 +1633,15 @@ f_all_features2 = f_basic + (
     p_rf_svd_count_c, p_rf_scl_svd_count_c, p_et_tfidf_c, p_et_svd_tfidf_c,
     p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c, p_et_scl_svd_count_c,
     p_lr_markov, p_rf_markov, p_et_markov, p_lr_sent2v, p_lr_sent2v,
-    p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext)
+    p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext, p_w2v_lstm, p_w2v_bi_lstm,
+    p_w2v_gru)
+
+f_all_features = f_all_nne_features + (
+    f_svd_tfidf, f_scl_svd_tfidf, f_svd_count, f_scl_svd_count, f_svd_tfidf_s,
+    f_scl_svd_tfidf_s, f_svd_count_s, f_scl_svd_count_s, f_svd_tfidf_l,
+    f_scl_svd_tfidf_l, f_svd_count_l, f_scl_svd_count_l, f_svd_tfidf_c,
+    f_scl_svd_tfidf_c, f_svd_count_c, f_scl_svd_count_c, f_markov_orders,
+    f_sent2v)
 
 p_xgb_all = apply_model(
     xgb.XGBClassifier(
@@ -1520,43 +1659,44 @@ p_xgb_all = apply_model(
     f_all_features,
     predict=True)
 
-p_lr_all = apply_model(
-    CalibratedClassifierCV(LogisticRegression(max_iter=10), method="isotonic"),
-    f_all_features,
-    predict=True)
-p_nb_all = apply_model(
-    CalibratedClassifierCV(MultinomialNB(), method="isotonic"),
-    f_all_features2,
-    predict=True)
-p_rf_all = apply_model(
-    CalibratedClassifierCV(
-        RandomForestClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
-        method="isotonic"),
-    f_all_features,
-    predict=True)
-p_et_all = apply_model(
-    CalibratedClassifierCV(
-        ExtraTreesClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
-        method="isotonic"),
-    f_all_features,
-    predict=True)
+#p_lr_all = apply_model(
+#    CalibratedClassifierCV(LogisticRegression(max_iter=10), method="isotonic"),
+#    f_all_features,
+#    predict=True)
+#p_nb_all = apply_model(
+#    CalibratedClassifierCV(MultinomialNB(), method="isotonic"),
+#    f_all_nne_features,
+#    predict=True)
+#p_rf_all = apply_model(
+#    CalibratedClassifierCV(
+#        RandomForestClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
+#        method="isotonic"),
+#    f_all_features,
+#    predict=True)
+#p_et_all = apply_model(
+#    CalibratedClassifierCV(
+#        ExtraTreesClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
+#        method="isotonic"),
+#    f_all_features,
+#    predict=True)
 
-print('p_xgb_all_all')
-
-p_xgb_all_all = apply_model(
-    xgb.XGBClassifier(
-        learning_rate=0.1,
-        n_estimators=100,
-        max_depth=5,
-        min_child_weight=1,
-        subsample=0.8,
-        colsample_bytree=0.5,
-        missing=-999,
-        nthread=-1,
-        silent=1,
-        objective='multi:softprob',
-        seed=2017), (p_xgb_all, p_lr_all, p_nb_all, p_rf_all, p_et_all),
-    predict=True)
+#print('p_xgb_all_all')
+#
+#p_xgb_all_all = apply_model(
+#    xgb.XGBClassifier(
+#        learning_rate=0.1,
+#        n_estimators=100,
+#        max_depth=5,
+#        min_child_weight=1,
+#        subsample=0.8,
+#        colsample_bytree=0.5,
+#        missing=-999,
+#        nthread=-1,
+#        silent=1,
+#        objective='multi:softprob',
+#        seed=2017),
+#    f_all_features + (p_xgb_all, p_lr_all, p_nb_all, p_rf_all, p_et_all),
+#    predict=True)
 
 import os.path
 
@@ -1572,4 +1712,4 @@ def make_submission(predictions, submission_path, file_name):
             file_name, index=False)
 
 
-make_submission(p_xgb_all_all, '../result', "p_xgb_all-20171209-03.csv")
+make_submission(p_xgb_all, '../result', "p_xgb_all-20171211-01.csv")
