@@ -673,8 +673,6 @@ for ii in range(end_order - start_order):
         np.hstack((f_markov_tt, f_markov_tt2, f_markov_tt3)))
 f_markov_orders = np.hstack(f_markov_orders_t)
 
-print(f_markov_orders[:10])
-
 #print(eap_MM[('n', 'o', 'm', 'e')])
 #print(sum([x for x in eap_MM[('n', 'o', 'm', 'e')].values()]))
 #print(eap_MM[('n', 'o', 'm', 'e')]['r'])
@@ -714,15 +712,15 @@ sent2v = [sent2vec(x) for x in data_full.text]
 f_sent2v = np.array(sent2v)
 print(f_sent2v[0])
 
-sve_train = np.load('../model/sve_train.npy')
-sve_test = np.load('../model/sve_test.npy')
+#sve_train = np.load('../model/sve_train.npy')
+#sve_test = np.load('../model/sve_test.npy')
 
-f_sent2v_t = np.concatenate((sve_train, sve_test), axis=0)
-print(f_sent2v_t[0])
+#f_sent2v_t = np.concatenate((sve_train, sve_test), axis=0)
+#print(f_sent2v_t[0])
 
 # ### glove
 
-glove_file = '../glove/glove.840B.300d.txt'
+glove_file = '../model/glove.840B.300d.txt'
 
 
 # load the GloVe vectors in a dictionary:
@@ -739,12 +737,78 @@ def loadGloveEmbeddings(glove_file):
     return embeddings_index
 
 
-#loadGloveEmbeddings(glove_file)
+glove2vec = loadGloveEmbeddings(glove_file)
 
 # ## Sentiment Analysis based features
 
 
-def nn_model(input_dim, embedding_dims, max_len):
+def apply_nn_model(features,
+                   model_func,
+                   input_dim=None,
+                   embedding_dims=None,
+                   max_len=None,
+                   embedding_matrix=None):
+    #assert model_name in ('nn_model', 'sent2vec_model', 'fasttext_model', 'lstm_model', 'bi_lstm_model', 'gru_model')
+
+    n_splits = 5
+    kf = model_selection.KFold(
+        n_splits=n_splits, shuffle=True, random_state=2017)
+
+    epochs = 100
+    earlyStopping = EarlyStopping(
+        monitor='val_loss', patience=2, verbose=0, mode='auto')
+
+    x_train = features[np.nonzero(i_train)]
+    x_test = features[np.nonzero(i_test)]
+    y_train_enc = np_utils.to_categorical(y_train)
+
+    cv_scores = []
+    pred_full_test = 0
+    pred_train = np.zeros([x_train.shape[0], 3])
+
+    for idx_dev, idx_val in kf.split(x_train):
+        x_dev, x_val = x_train[idx_dev], x_train[idx_val]
+        y_dev, y_val = y_train_enc[idx_dev], y_train_enc[idx_val]
+
+        model = model_func(input_dim, embedding_dims, max_len,
+                           embedding_matrix)
+
+        #if model_name is 'nn_model':
+        #    model = nn_model(input_dim, embedding_dims, max_len)
+        #elif model_name is 'sent2vec_model':
+        #    model = sent2vec_model()
+        #elif model_name is 'fasttext_model':
+        #    model = fasttext_model(input_dim, embedding_dims)
+        #elif model_name is 'lstm_model':
+        #    model = lstm_model(input_dim, embedding_dims, max_len,
+        #                       embedding_matrix)
+        #elif model_name is 'bi_lstm_model':
+        #    model = bi_lstm_model(input_dim, embedding_dims, max_len,
+        #                          embedding_matrix)
+        #elif model_name is 'gru_model':
+        #    model = gru_model(input_dim, embedding_dims, max_len,
+        #                      embedding_matrix)
+
+        model.fit(
+            x_dev,
+            y_dev,
+            batch_size=32,
+            validation_data=(x_val, y_val),
+            epochs=epochs,
+            callbacks=[earlyStopping])
+        pred_y_val = model.predict(x_val)
+        pred_y_test = model.predict(x_test)
+        pred_full_test = pred_full_test + pred_y_test
+        pred_train[idx_val, :] = pred_y_val
+        cv_scores.append(metrics.log_loss(y_val, pred_y_val))
+    pred_full_test = pred_full_test / float(n_splits)
+    print("Mean cv score: {}".format(np.mean(cv_scores)))
+
+    p_full = np.concatenate((pred_train, pred_full_test), axis=0)
+    return pd.DataFrame(p_full)
+
+
+def nn_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model = Sequential()
     model.add(
         Embedding(
@@ -756,7 +820,7 @@ def nn_model(input_dim, embedding_dims, max_len):
     model.add(Dropout(0.3))
     model.add(MaxPooling1D())
     model.add(Flatten())
-    model.add(Dense(800, activation='relu'))
+    model.add(Dense(64, activation='relu'))
     model.add(Dropout(0.5))
     model.add(Dense(3, activation='softmax'))
 
@@ -767,6 +831,7 @@ def nn_model(input_dim, embedding_dims, max_len):
     return model
 
 
+#max_len = 35
 max_len = 70
 num_words = 10000
 
@@ -778,10 +843,17 @@ f_nn_full_pad = pad_sequences(sequences=f_nn_full_seq, maxlen=max_len)
 word_index = tokenizer.word_index
 print('Found %s unique tokens.' % len(word_index))
 
+# nn model
+input_dim = min(num_words, len(word_index)) + 1
+embedding_dims = 32
+max_len = 70
+p_nn = apply_nn_model(f_nn_full_pad, nn_model, input_dim, embedding_dims,
+                      max_len)
+
 # Sent2vec Neural Network
 
 
-def sent2vec_model():
+def sent2vec_model(input_dim, embedding_dims, max_len, embedding_matrix):
     # create a simple 3 layer sequential neural net
     model = Sequential()
 
@@ -790,7 +862,7 @@ def sent2vec_model():
     model.add(Activation("relu"))
     model.add(Dropout(0.3))
 
-    model.add(Dense(128))
+    model.add(Dense(32))
     model.add(BatchNormalization())
     model.add(Activation("relu"))
     model.add(Dropout(0.3))
@@ -808,6 +880,9 @@ def sent2vec_model():
 
 t_scl_sent2v_nn = StandardScaler()
 f_scl_sent2v_nn = t_scl_sent2v_nn.fit_transform(f_sent2v)
+
+# sent2vec nn model
+p_sent2v_nn = apply_nn_model(f_scl_sent2v_nn, sent2vec_model)
 
 
 # Separate punctuation from words
@@ -841,7 +916,7 @@ def create_docs(df, n_gram_max=2):
     return docs
 
 
-def fasttext_model(input_dim, embedding_dims, optimizer='adam'):
+def fasttext_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model = Sequential()
     model.add(Embedding(input_dim=input_dim, output_dim=embedding_dims))
     model.add(GlobalAveragePooling1D())
@@ -849,13 +924,13 @@ def fasttext_model(input_dim, embedding_dims, optimizer='adam'):
 
     model.compile(
         loss='categorical_crossentropy',
-        optimizer=optimizer,
+        optimizer='adam',
         metrics=['accuracy'])
     return model
 
 
 min_count = 2
-max_len = 85
+max_len = 90
 
 docs = create_docs(data_full)
 tokenizer = Tokenizer(lower=False, filters='')
@@ -869,16 +944,22 @@ tokenizer.fit_on_texts(docs)
 f_ft_docs_seq = tokenizer.texts_to_sequences(docs)
 f_ft_docs_pad = pad_sequences(sequences=f_ft_docs_seq, maxlen=max_len)
 
+# fasttext model
+input_dim = np.max(f_ft_docs_pad) + 1
+embedding_dims = 20
+p_fasttext = apply_nn_model(f_ft_docs_pad, fasttext_model, input_dim,
+                            embedding_dims)
+
 # Word2vec Neural Network
 
 
 # preprocessing
 def text_preprocess(sentence):
-    stopwords = nltk.corpus.stopwords.words('english')
+    #stopwords = nltk.corpus.stopwords.words('english')
     tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
 
     text_list = tokenizer.tokenize(sentence.lower())
-    text_list = [w for w in text_list if w not in stopwords]
+    #text_list = [w for w in text_list if w not in stopwords]
     text_list = [w for w in text_list if w.isalpha()]
     txt = " ".join([w for w in text_list])
 
@@ -886,7 +967,7 @@ def text_preprocess(sentence):
 
 
 min_count = 2
-max_len = 20  # preprocess mean len: 13.023810375
+max_len = 70
 
 pre_text = [text_preprocess(x) for x in data_full.text]
 tokenizer = Tokenizer(lower=False, filters='')
@@ -902,15 +983,22 @@ f_w2v_text_pad = pad_sequences(sequences=f_w2v_text_seq, maxlen=max_len)
 
 word_index = tokenizer.word_index
 
-# create an embedding matrix for the words we have in the dataset
-embedding_matrix = np.zeros((len(word_index) + 1, 300))
-for word, i in tqdm(word_index.items()):
-    try:
-        embedding_vector = word2vec[word]
-    except:
-        continue
-    if embedding_vector is not None:
-        embedding_matrix[i] = embedding_vector
+
+def get_embedding_matrix(word_index, word2vec):
+    # create an embedding matrix for the words we have in the dataset
+    embedding_matrix = np.zeros((len(word_index) + 1, 300))
+    for word, i in tqdm(word_index.items()):
+        try:
+            embedding_vector = word2vec[word]
+        except:
+            continue
+        if embedding_vector is not None:
+            embedding_matrix[i] = embedding_vector
+    return embedding_matrix
+
+
+w2v_embedding_matrix = get_embedding_matrix(word_index, word2vec)
+glv_embedding_matrix = get_embedding_matrix(word_index, glove2vec)
 
 print(data_full.text[0])
 print(pre_text[0])
@@ -918,10 +1006,12 @@ print(f_w2v_text_pad[0])
 print(len(word_index))
 print(word_index['process'])
 print(word2vec['process'])
-print(embedding_matrix[3217])
+print(w2v_embedding_matrix[3351])
+print(glove2vec['process'])
+print(glv_embedding_matrix[3351])
 
 
-def lstm_model(input_dim, embedding_dims, max_len):
+def lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model = Sequential()
     model.add(
         Embedding(
@@ -953,7 +1043,30 @@ def lstm_model(input_dim, embedding_dims, max_len):
     return model
 
 
-def bi_lstm_model(input_dim, embedding_dims, max_len):
+# w2v lstm model
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 70
+embedding_matrix = w2v_embedding_matrix
+p_w2v_lstm = apply_nn_model(f_w2v_text_pad, lstm_model, input_dim,
+                            embedding_dims, max_len, embedding_matrix)
+
+p_w2v_lstm.to_pickle('../model/p_w2v_lstm.pkl')
+#p_w2v_lstm = pd.read_pickle('../model/p_w2v_lstm.pkl')
+
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 70
+embedding_matrix = glv_embedding_matrix
+p_glv_lstm = apply_nn_model(f_w2v_text_pad, lstm_model, input_dim,
+                            embedding_dims, max_len, embedding_matrix)
+
+p_glv_lstm.to_pickle('../model/p_glv_lstm.pkl')
+
+#p_glv_lstm = pd.read_pickle('../model/p_glv_lstm.pkl')
+
+
+def bi_lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model = Sequential()
     model.add(
         Embedding(
@@ -985,7 +1098,30 @@ def bi_lstm_model(input_dim, embedding_dims, max_len):
     return model
 
 
-def gru_model(input_dim, embedding_dims, max_len):
+# bi lstm model
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 70
+embedding_matrix = w2v_embedding_matrix
+p_w2v_bi_lstm = apply_nn_model(f_w2v_text_pad, bi_lstm_model, input_dim,
+                               embedding_dims, max_len, embedding_matrix)
+
+p_w2v_bi_lstm.to_pickle('../model/p_w2v_bi_lstm.pkl')
+#p_w2v_bi_lstm = pd.read_pickle('../model/p_w2v_bi_lstm.pkl')
+
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 70
+embedding_matrix = glv_embedding_matrix
+p_glv_bi_lstm = apply_nn_model(f_w2v_text_pad, bi_lstm_model, input_dim,
+                               embedding_dims, max_len, embedding_matrix)
+
+p_glv_bi_lstm.to_pickle('../model/p_glv_bi_lstm.pkl')
+
+#p_glv_bi_lstm = pd.read_pickle('../model/p_glv_bi_lstm.pkl')
+
+
+def gru_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model = Sequential()
     model.add(
         Embedding(
@@ -1015,6 +1151,28 @@ def gru_model(input_dim, embedding_dims, max_len):
         metrics=['accuracy'])
     return model
 
+
+# gru model
+
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 70
+embedding_matrix = w2v_embedding_matrix
+p_w2v_gru = apply_nn_model(f_w2v_text_pad, gru_model, input_dim,
+                           embedding_dims, max_len, embedding_matrix)
+
+p_w2v_gru.to_pickle('../model/p_w2v_gru.pkl')
+#p_w2v_gru = pd.read_pickle('../model/p_w2v_gru.pkl')
+
+input_dim = len(word_index) + 1
+embedding_dims = 300
+max_len = 70
+embedding_matrix = glv_embedding_matrix
+p_glv_gru = apply_nn_model(f_w2v_text_pad, gru_model, input_dim,
+                           embedding_dims, max_len, embedding_matrix)
+
+p_glv_gru.to_pickle('../model/p_glv_gru.pkl')
+#p_glv_gru = pd.read_pickle('../model/p_glv_gru.pkl')
 
 # # Ensembling & Stacking models
 
@@ -1053,90 +1211,6 @@ def apply_model(model, features, evaluate=True, predict=False):
         p_full = np.concatenate((p_cv, p_test), axis=0)
         return pd.DataFrame(p_full)
 
-
-def apply_nn_model(model_name, features):
-    assert model_name in ('nn_model', 'sent2vec_model', 'fasttext_model',
-                          'lstm_model', 'bi_lstm_model', 'gru_model')
-
-    n_splits = 5
-    kf = model_selection.KFold(
-        n_splits=n_splits, shuffle=True, random_state=2017)
-
-    epochs = 100
-    earlyStopping = EarlyStopping(
-        monitor='val_loss', patience=2, verbose=0, mode='auto')
-
-    x_train = features[np.nonzero(i_train)]
-    x_test = features[np.nonzero(i_test)]
-    y_train_enc = np_utils.to_categorical(y_train)
-
-    cv_scores = []
-    pred_full_test = 0
-    pred_train = np.zeros([x_train.shape[0], 3])
-
-    for idx_dev, idx_val in kf.split(x_train):
-        x_dev, x_val = x_train[idx_dev], x_train[idx_val]
-        y_dev, y_val = y_train_enc[idx_dev], y_train_enc[idx_val]
-
-        if model_name is 'nn_model':
-            model = nn_model(input_dim, embedding_dims, max_len)
-        elif model_name is 'sent2vec_model':
-            model = sent2vec_model()
-        elif model_name is 'fasttext_model':
-            model = fasttext_model(input_dim, embedding_dims)
-        elif model_name is 'lstm_model':
-            model = lstm_model(input_dim, embedding_dims, max_len)
-        elif model_name is 'bi_lstm_model':
-            model = bi_lstm_model(input_dim, embedding_dims, max_len)
-        elif model_name is 'gru_model':
-            model = gru_model(input_dim, embedding_dims, max_len)
-
-        model.fit(
-            x_dev,
-            y_dev,
-            batch_size=32,
-            validation_data=(x_val, y_val),
-            epochs=epochs,
-            callbacks=[earlyStopping])
-        pred_y_val = model.predict(x_val)
-        pred_y_test = model.predict(x_test)
-        pred_full_test = pred_full_test + pred_y_test
-        pred_train[idx_val, :] = pred_y_val
-        cv_scores.append(metrics.log_loss(y_val, pred_y_val))
-    pred_full_test = pred_full_test / float(n_splits)
-    print("Mean cv score: {}".format(np.mean(cv_scores)))
-
-    p_full = np.concatenate((pred_train, pred_full_test), axis=0)
-    return pd.DataFrame(p_full)
-
-
-# lstm model
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 20
-p_w2v_lstm = apply_nn_model('lstm_model', f_w2v_text_pad)
-
-p_w2v_lstm.to_pickle('../model/p_w2v_lstm.pkl')
-#p_w2v_lstm = pd.read_pickle('../model/p_w2v_lstm.pkl')
-
-# bi lstm model
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 20
-p_w2v_bi_lstm = apply_nn_model('bi_lstm_model', f_w2v_text_pad)
-
-p_w2v_bi_lstm.to_pickle('../model/p_w2v_bi_lstm.pkl')
-#p_w2v_bi_lstm = pd.read_pickle('../model/p_w2v_bi_lstm.pkl')
-
-# gru model
-
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 20
-p_w2v_gru = apply_nn_model('gru_model', f_w2v_text_pad)
-
-p_w2v_gru.to_pickle('../model/p_w2v_gru.pkl')
-#p_w2v_gru = pd.read_pickle('../model/p_w2v_gru.pkl')
 
 # Confusion Matrix
 import itertools
@@ -1594,20 +1668,6 @@ p_rf_sent2v = apply_model(
 p_et_sent2v = apply_model(
     ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_sent2v, ), predict=True)
 
-# nn model
-input_dim = min(num_words, len(word_index)) + 1
-embedding_dims = 32
-max_len = 35
-p_nn = apply_nn_model('nn_model', f_nn_full_pad)
-
-# sent2vec nn model
-p_sent2v_nn = apply_nn_model('sent2vec_model', f_scl_sent2v_nn)
-
-# fasttext model
-input_dim = np.max(f_ft_docs_pad) + 1
-embedding_dims = 20
-p_fasttext = apply_nn_model('fasttext_model', f_ft_docs_pad)
-
 # ## Second-Level Predictions
 
 # non-negative
@@ -1634,7 +1694,7 @@ f_all_nne_features = f_basic + (
     p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c, p_et_scl_svd_count_c,
     p_lr_markov, p_rf_markov, p_et_markov, p_lr_sent2v, p_lr_sent2v,
     p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext, p_w2v_lstm, p_w2v_bi_lstm,
-    p_w2v_gru)
+    p_w2v_gru, p_glv_lstm, p_glv_bi_lstm, p_glv_gru)
 
 f_all_features = f_all_nne_features + (
     f_svd_tfidf, f_scl_svd_tfidf, f_svd_count, f_scl_svd_count, f_svd_tfidf_s,
@@ -1712,4 +1772,4 @@ def make_submission(predictions, submission_path, file_name):
             file_name, index=False)
 
 
-make_submission(p_xgb_all, '../result', "p_xgb_all-20171211-01.csv")
+make_submission(p_xgb_all, '../result', "p_xgb_all-20171211-02.csv")
