@@ -1,7 +1,8 @@
-# coding: utf-8
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-# Load and check data
-
+import re
+import string
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
@@ -9,10 +10,15 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+from imageio import imread
+from wordcloud import WordCloud, STOPWORDS
+
+from afinn import Afinn
+
 import gensim
 import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
-from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import MultinomialNB
@@ -22,7 +28,7 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.decomposition import TruncatedSVD, LatentDirichletAllocation
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from sklearn.pipeline import make_pipeline
+#from sklearn.pipeline import make_pipeline
 from sklearn.base import ClassifierMixin
 from sklearn.calibration import CalibratedClassifierCV
 
@@ -62,324 +68,345 @@ i_test = y_full.isnull()
 y_train = data_train.author.map(author_mapping_dict)
 #y_train = y_full[i_train]
 
-# Explore the dataset
-print("Number of rows in train dataset {}".format(data_train.shape[0]))
-print("Number of rows in test dataset {}".format(data_test.shape[0]))
-print("No duplicates in train data") if data_train.shape[
-    0] == data_train.text.unique().__len__() else print("Oops")
-print("No duplicates in test data") if data_test.shape[
-    0] == data_test.text.unique().__len__() else print("Oops")
-print("Unique author is data {}".format(data_train.author.unique()))
-print("Number of nulls in the train is {} and text is {}".format(
-    data_train.isnull().sum().sum(), data_test.isnull().sum().sum()))
-
-# # Natural Language Processing
-
-# ## Tokenization
-
-# Storing the first text element as a string
-first_text = data_train.text.values[0]
-print(first_text)
-print("=" * 90)
-print(first_text.split(" "))
-
-first_text_list = nltk.word_tokenize(first_text)
-print(first_text_list)
-
-# ## Stopword Removal
-
-stopwords = nltk.corpus.stopwords.words('english')
-len(stopwords)
-
-first_text_list_cleaned = [
-    word for word in first_text_list if word.lower() not in stopwords
-]
-print(first_text_list_cleaned)
-print("=" * 90)
-print("Length of original list: {} words\n"
-      "Length of list after stopwords removal: {} words".format(
-          len(first_text_list), len(first_text_list_cleaned)))
-
-# ## Stemming and Lemmatization
-
-stemmer = nltk.stem.PorterStemmer()
-print("The stemmed form of running is: {}".format(stemmer.stem("running")))
-print("The stemmed form of runs is: {}".format(stemmer.stem("runs")))
-print("The stemmed form of run is: {}".format(stemmer.stem("run")))
-
-print("The stemmed form of leaves is: {}".format(stemmer.stem("leaves")))
-
-lemm = nltk.stem.WordNetLemmatizer()
-print("The lemmatized form of leaves is: {}".format(lemm.lemmatize("leaves")))
-print("The lemmatized form of leaves is: {}".format(
-    lemm.lemmatize("ascertaining")))
-
-# ## Vectorizing Raw Text
-
-# Defining our sentence
-sentence = ["I love to eat Burgers", "I love to eat Fries"]
-# try CountVectorizer
-vectorizer = CountVectorizer(min_df=0)
-sentence_transform = vectorizer.fit_transform(sentence)
-
-print("The features are:\n {}".format(vectorizer.get_feature_names()))
-print("\nThe vectorized array looks like:\n {}".format(
-    sentence_transform.toarray()))
-
-sentence = ["I love to eat Burgers", "I love to eat Fries"]
-# try  TfidfVectorizer
-vectorizer = TfidfVectorizer(min_df=0)
-sentence_transform = vectorizer.fit_transform(sentence)
-
-print("The features are:\n {}".format(vectorizer.get_feature_names()))
-print("\nThe vectorized array looks like:\n {}".format(
-    sentence_transform.toarray()))
-
-# # Feature Engineering
-
-# ## Basic features
-
-import re
-import string
+punctuations = [{
+    "id": 1,
+    "p": "[;:]"
+}, {
+    "id": 2,
+    "p": "[,.]"
+}, {
+    "id": 3,
+    "p": "[?]"
+}, {
+    "id": 4,
+    "p": "[\']"
+}, {
+    "id": 5,
+    "p": "[\"]"
+}, {
+    "id": 6,
+    "p": "[;:,.?\'\"]"
+}]
 
 
-def num_words(raw):
-    return len(re.findall(r'\w+', raw['text']))
-
-
-def num_chars(raw):
-    return len(raw['text'])
-
-
-def mean_len_words(raw):
+def get_words(text):
     tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(raw['text'])
-
-    return np.mean([len(w) for w in text_list])
-
-
-def num_unique_words(raw):
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(raw['text'].lower())
-
-    return len(list(set(text_list)))
+    word_list = tokenizer.tokenize(text)
+    return word_list
 
 
-def num_stopwords(raw):
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(raw['text'].lower())
+def num_words(text):
+    return len(get_words(text))
 
+
+def num_chars(text):
+    return len(text)
+
+
+def mean_len_words(text):
+    return np.mean([len(w) for w in get_words(text)])
+
+
+def first_word_len(text):
+    return len(get_words(text)[0])
+
+
+def last_word_len(text):
+    return len(get_words(text)[-1])
+
+
+def num_unique_words(text):
+    return len(list(set(get_words(text))))
+
+
+def num_stopwords(text):
     stopwords = nltk.corpus.stopwords.words('english')
-
-    return len([w for w in text_list if w in stopwords])
-
-
-def num_punctuations(raw):
-    text = raw['text'].lower()
-    text_list = nltk.word_tokenize(text)
-
-    return len([w for w in text_list if w in string.punctuation])
+    return len([w for w in get_words(text) if w in stopwords])
 
 
-def num_upper_words(raw):
-    text = raw['text']
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    return len([w for w in text_list if w.isupper()])
+def num_punctuations(text):
+    word_list = nltk.word_tokenize(text)
+    return len([w for w in word_list if w in string.punctuation])
 
 
-def num_title_words(raw):
-    text = raw['text']
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
+def num_sets_punctuations(text):
+    word_list = nltk.word_tokenize(text)
 
-    return len([w for w in text_list if w.istitle()])
-
-
-def num_noun_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    pos_list = nltk.pos_tag(text_list)
-    noun_count = len(
-        [w for w in pos_list if w[1] in ('NN', 'NNP', 'NNPS', 'NNS')])
-    return noun_count
+    punc_nums = np.zeros(len(punctuations))
+    for i, punc in enumerate(punctuations):
+        #punc_nums[i] = len([w for w in word_list if bool(re.search(punc["p"], w))]) * 100.0 / len(word_list)
+        punc_nums[i] = len(
+            [w for w in word_list if bool(re.search(punc["p"], w))])
+    return punc_nums
 
 
-def num_adj_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    pos_list = nltk.pos_tag(text_list)
-    adj_count = len([w for w in pos_list if w[1] in ('JJ', 'JJR', 'JJS')])
-    return adj_count
+def num_upper_words(text):
+    return len([w for w in get_words(text) if w.isupper()])
 
 
-def num_verbs_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
+def num_title_words(text):
+    return len([w for w in get_words(text) if w.istitle()])
 
-    pos_list = nltk.pos_tag(text_list)
-    verbs_count = len([
+
+def num_unknown_symbols(text):
+    symbols_known = string.ascii_letters + string.digits + string.punctuation
+    return sum([not x in symbols_known for x in text])
+
+
+def num_noun_words(text):
+    pos_list = nltk.pos_tag(get_words(text))
+    return len([w for w in pos_list if w[1] in ('NN', 'NNP', 'NNPS', 'NNS')])
+
+
+def num_adj_words(text):
+    pos_list = nltk.pos_tag(get_words(text))
+    return len([w for w in pos_list if w[1] in ('JJ', 'JJR', 'JJS')])
+
+
+def num_verbs_words(text):
+    pos_list = nltk.pos_tag(get_words(text))
+    return len([
         w for w in pos_list
         if w[1] in ('VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ')
     ])
-    return verbs_count
 
 
-def fra_unique_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    unique_word_count = len(list(set(text_list)))
-    word_count = len(text_list)
-    return unique_word_count / word_count
+def symbol_id(x):
+    symbols = [
+        x for x in string.ascii_letters + string.digits + string.punctuation
+    ]
+    return np.where(np.array(symbols) == x)[0][0]
 
 
-def fra_stopwords(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
+f_num_words = np.array([num_words(text) for text in data_full.text]).reshape(
+    data_full.shape[0], -1)
+f_num_chars = np.array([num_chars(text) for text in data_full.text]).reshape(
+    data_full.shape[0], -1)
+f_mean_len_words = np.array([mean_len_words(text)
+                             for text in data_full.text]).reshape(
+                                 data_full.shape[0], -1)
+f_first_word_len = np.array([first_word_len(text)
+                             for text in data_full.text]).reshape(
+                                 data_full.shape[0], -1)
+f_last_word_len = np.array([last_word_len(text)
+                            for text in data_full.text]).reshape(
+                                data_full.shape[0], -1)
+f_first_symbol_id = np.array([symbol_id(text[0])
+                              for text in data_full.text]).reshape(
+                                  data_full.shape[0], -1)
+f_last_symbol_id = np.array([symbol_id(text[-1])
+                             for text in data_full.text]).reshape(
+                                 data_full.shape[0], -1)
 
-    stopwords = nltk.corpus.stopwords.words('english')
+f_num_unique_words = np.array(
+    [num_unique_words(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
+f_num_stopwords = np.array([num_stopwords(text)
+                            for text in data_full.text]).reshape(
+                                data_full.shape[0], -1)
+f_num_punctuations = np.array(
+    [num_punctuations(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
+f_num_sets_punctuations = np.array(
+    [num_sets_punctuations(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
+f_num_upper_words = np.array(
+    [num_upper_words(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
+f_num_title_words = np.array(
+    [num_title_words(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
+f_num_unknown_symbols = np.array(
+    [num_unknown_symbols(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
 
-    stopwords_count = len([w for w in text_list if w in stopwords])
-    word_count = len(text_list)
-    return stopwords_count / word_count
+f_num_noun_words = np.array([num_noun_words(text)
+                             for text in data_full.text]).reshape(
+                                 data_full.shape[0], -1)
+f_num_adj_words = np.array([num_adj_words(text)
+                            for text in data_full.text]).reshape(
+                                data_full.shape[0], -1)
+f_num_verbs_words = np.array(
+    [num_verbs_words(text)
+     for text in data_full.text]).reshape(data_full.shape[0], -1)
 
+f_fra_unique_words = f_num_unique_words / f_num_words
+f_fra_stopwords = f_num_stopwords / f_num_words
+f_fra_punctuations = f_num_punctuations / f_num_words
+f_fra_sets_punctuations = f_num_sets_punctuations / f_num_words
+f_fra_upper_words = f_num_upper_words / f_num_words
+f_fra_title_words = f_num_title_words / f_num_words
+f_fra_unknown_symbols = f_num_unknown_symbols / f_num_chars
+f_fra_noun_words = f_num_noun_words / f_num_words
+f_fra_adj_words = f_num_adj_words / f_num_words
+f_fra_verbs_words = f_num_verbs_words / f_num_words
 
-def fra_punctuations(raw):
-    text = raw['text'].lower()
-    text_list = nltk.word_tokenize(text)
-
-    punctuation_count = len([w for w in text_list if w in string.punctuation])
-    char_count = len(text)
-    return punctuation_count / char_count
-
-
-def fra_upper_words(raw):
-    text = raw['text']
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    word_upper_count = len([w for w in text_list if w.isupper()])
-    word_count = len(text_list)
-    return word_upper_count / word_count
-
-
-def fra_title_words(raw):
-    text = raw['text']
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    word_title_count = len([w for w in text_list if w.istitle()])
-    word_count = len(text_list)
-    return word_title_count / word_count
-
-
-def fra_noun_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    pos_list = nltk.pos_tag(text_list)
-    noun_count = len(
-        [w for w in pos_list if w[1] in ('NN', 'NNP', 'NNPS', 'NNS')])
-    word_count = len(text_list)
-    return noun_count / word_count
-
-
-def fra_adj_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    pos_list = nltk.pos_tag(text_list)
-    adj_count = len([w for w in pos_list if w[1] in ('JJ', 'JJR', 'JJS')])
-    word_count = len(text_list)
-    return adj_count / word_count
-
-
-def fra_verbs_words(raw):
-    text = raw['text'].lower()
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-    text_list = tokenizer.tokenize(text)
-
-    pos_list = nltk.pos_tag(text_list)
-    verbs_count = len([
-        w for w in pos_list
-        if w[1] in ('VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ')
-    ])
-    word_count = len(text_list)
-    return verbs_count / word_count
-
-
-# In[23]:
-
-f_num_words = data_full.apply(
-    lambda raw: num_words(raw), axis=1).as_matrix()[:, None]
-f_num_chars = data_full.apply(
-    lambda raw: num_chars(raw), axis=1).as_matrix()[:, None]
-f_mean_len_words = data_full.apply(
-    lambda raw: mean_len_words(raw), axis=1).as_matrix()[:, None]
-
-f_num_unique_words = data_full.apply(
-    lambda raw: num_unique_words(raw), axis=1).as_matrix()[:, None]
-f_num_stopwords = data_full.apply(
-    lambda raw: num_stopwords(raw), axis=1).as_matrix()[:, None]
-f_num_punctuations = data_full.apply(
-    lambda raw: num_punctuations(raw), axis=1).as_matrix()[:, None]
-f_num_upper_words = data_full.apply(
-    lambda raw: num_upper_words(raw), axis=1).as_matrix()[:, None]
-f_num_title_words = data_full.apply(
-    lambda raw: num_title_words(raw), axis=1).as_matrix()[:, None]
-
-f_num_noun_words = data_full.apply(
-    lambda raw: num_noun_words(raw), axis=1).as_matrix()[:, None]
-f_num_adj_words = data_full.apply(
-    lambda raw: num_adj_words(raw), axis=1).as_matrix()[:, None]
-f_num_verbs_words = data_full.apply(
-    lambda raw: num_verbs_words(raw), axis=1).as_matrix()[:, None]
-
-f_fra_unique_words = data_full.apply(
-    lambda raw: fra_unique_words(raw), axis=1).as_matrix()[:, None]
-f_fra_stopwords = data_full.apply(
-    lambda raw: fra_stopwords(raw), axis=1).as_matrix()[:, None]
-f_fra_punctuations = data_full.apply(
-    lambda raw: fra_punctuations(raw), axis=1).as_matrix()[:, None]
-f_fra_upper_words = data_full.apply(
-    lambda raw: fra_upper_words(raw), axis=1).as_matrix()[:, None]
-f_fra_title_words = data_full.apply(
-    lambda raw: fra_title_words(raw), axis=1).as_matrix()[:, None]
-
-f_fra_noun_words = data_full.apply(
-    lambda raw: fra_noun_words(raw), axis=1).as_matrix()[:, None]
-f_fra_adj_words = data_full.apply(
-    lambda raw: fra_adj_words(raw), axis=1).as_matrix()[:, None]
-f_fra_verbs_words = data_full.apply(
-    lambda raw: fra_verbs_words(raw), axis=1).as_matrix()[:, None]
-
-f_basic = (f_num_words, f_num_chars, f_mean_len_words, f_num_unique_words,
-           f_num_stopwords, f_num_punctuations, f_num_title_words,
-           f_num_upper_words, f_num_noun_words, f_num_adj_words,
+f_basic = (f_num_words, f_num_chars, f_mean_len_words, f_first_word_len,
+           f_last_word_len, f_first_symbol_id, f_last_symbol_id,
+           f_num_unique_words, f_num_stopwords, f_num_punctuations,
+           f_num_sets_punctuations, f_num_upper_words, f_num_title_words,
+           f_num_unknown_symbols, f_num_noun_words, f_num_adj_words,
            f_num_verbs_words, f_fra_unique_words, f_fra_stopwords,
-           f_fra_punctuations, f_fra_title_words, f_fra_upper_words,
-           f_fra_noun_words, f_fra_adj_words, f_fra_verbs_words)
+           f_fra_punctuations, f_fra_sets_punctuations, f_fra_upper_words,
+           f_fra_title_words, f_fra_unknown_symbols, f_fra_noun_words,
+           f_fra_adj_words, f_fra_verbs_words)
 
-# ## Word features
+## before save
+#p_lr_basic = apply_model(LogisticRegression(), f_basic, predict=True)
+#
+## after save
+#np.save('../model/f_basic', np.hstack(f_basic))
 
-# ### Word based 6 features
+f_basic = np.load('../model/f_basic.npy')
+
+#
+#p_lr_basic = apply_model(LogisticRegression(), (f_basic, ), predict=True)
+
+
+# bigram clouds
+class WordCloudIntersection():
+    def __init__(self,
+                 stopwords=list(),
+                 punctuation=list(),
+                 stemmer=None,
+                 ngram=1):
+        self.stopwords = stopwords
+        self.punctuation = punctuation
+        self.remove = self.stopwords + self.punctuation
+        self.clouds = dict()
+        self.texts = dict()
+        self.stemmer = stemmer
+        self.ngram = ngram
+
+    def find_ngrams(self, input_list, n):
+        return [
+            " ".join(list(i))
+            for i in zip(* [input_list[i:] for i in range(n)])
+        ]
+
+    # It would be much  more correct to call this function 'get_tokens'
+    # it extracts not only words, but n-grams as well
+    def get_words(self, text):
+        words = nltk.tokenize.word_tokenize(text)
+        words = [w for w in words if not w in self.remove]
+        if not self.stemmer is None:
+            words = [self.stemmer.stem(w) for w in words]
+
+        if self.ngram > 1:
+            words = self.find_ngrams(words, self.ngram)
+        return words
+
+    # Jaccard distance again
+    def relative_intersection(self, x, y):
+        try:
+            return len(x & y) / len(x | y)
+        except:
+            return 0.0
+
+    def fit(self, x, categories, data_train, data_test=None):
+        cat_names = np.unique(data_train[categories])
+
+        text_train = " ".join(list(data_train[x]))
+        text_test = ""
+        if not data_test is None:
+            text_test = " ".join(list(data_test[x]))
+
+        # Tokens presenting in both train and test data
+        words_unique = self.get_words((text_train + text_test).lower())
+
+        for cat in cat_names:
+            self.texts[cat] = (
+                " ".join(list(data_train[x][data_train[categories] == cat]))
+            ).lower()
+            words = self.get_words(self.texts[cat])
+            self.clouds[cat] = pd.value_counts(words)
+
+        # use only tokens presented in both train and test data,
+        # feature will force your model to overfit to the train data otherwise
+        for cat in cat_names:
+            self.clouds[cat] = self.clouds[cat][list(
+                set(self.clouds[cat].index) & set(words_unique))]
+
+        # Keep only author-specific tokens
+        for cat in cat_names:
+            key_leftover = list(set(cat_names) - set([cat]))
+            bigrams_other = set(self.clouds[key_leftover[0]].index) | set(
+                self.clouds[key_leftover[1]].index)
+            self.clouds[cat] = self.clouds[cat][list(
+                set(self.clouds[cat].index) - bigrams_other)]
+
+    def transform(self, x, data):
+        intersection = dict()
+        prefix = '_intersect_'
+        if self.ngram > 1:
+            prefix = '%s-gram%s' % (self.ngram, prefix)
+        else:
+            prefix = 'word' + prefix
+        for key in self.clouds.keys():
+            category_words_set = set(self.clouds[key].index)
+            intersection[prefix + key] = list()
+            for text in data[x]:
+                unique_words = set(self.get_words(text.lower()))
+                fraction = self.relative_intersection(unique_words,
+                                                      category_words_set)
+                intersection[prefix + key].append(fraction)
+        return pd.DataFrame(intersection)
+
+
+"""
+stopwords = nltk.corpus.stopwords.words('english')
+t_bigci = WordCloudIntersection(
+    stopwords=stopwords,
+    punctuation=list(string.punctuation),
+    stemmer=nltk.stem.SnowballStemmer('english'),
+    ngram=2)
+t_bigci.fit(
+    x='text', categories='author', data_train=data_train, data_test=data_test)
+
+f_train_big_intersections = t_bigci.transform(x='text', data=data_train)
+f_test_big_intersections = t_bigci.transform(x='text', data=data_test)
+f_big_intersections = pd.DataFrame(
+    np.concatenate(
+        (f_train_big_intersections, f_test_big_intersections), axis=0))
+print(f_big_intersections.head())
+f_big_intersections.to_pickle('../model/f_big_intersections.pkl')
+"""
+f_big_intersections = pd.read_pickle('../model/f_big_intersections.pkl')
+"""
+t_trigci = WordCloudIntersection(
+    stopwords=stopwords,
+    punctuation=list(string.punctuation),
+    stemmer=nltk.stem.SnowballStemmer('english'),
+    ngram=3)
+t_trigci.fit(
+    x='text', categories='author', data_train=data_train, data_test=data_test)
+
+f_train_trig_intersections = t_trigci.transform(x='text', data=data_train)
+f_test_trig_intersections = t_trigci.transform(x='text', data=data_test)
+f_trig_intersections = pd.DataFrame(
+    np.concatenate(
+        (f_train_trig_intersections, f_test_trig_intersections), axis=0))
+print(f_trig_intersections.head())
+f_trig_intersections.to_pickle('../model/f_trig_intersections.pkl')
+"""
+f_trig_intersections = pd.read_pickle('../model/f_trig_intersections.pkl')
+
+from sklearn.preprocessing import normalize
+
+f_nor_big_intersections = normalize(f_big_intersections)
+#f_1000_big_intersections = f_big_intersections * 1000
+#f_10000_big_intersections = f_big_intersections * 10000
+
+f_nor_trig_intersections = normalize(f_trig_intersections)
+#f_1000_trig_intersections = f_trig_intersections * 1000
+#f_10000_trig_intersections = f_trig_intersections * 10000
 
 n_components = 40
 
 # TFIDF features
 t_tfidf = TfidfVectorizer(
-    stop_words="english", ngram_range=(1, 3))  # token_pattern=r'\w{1,}'
+    stop_words="english", ngram_range=(1, 3),
+    min_df=3)  # token_pattern=r'\w{1,}'
 f_tfidf = t_tfidf.fit_transform(data_full.text)
 
 # TFIDF with SVD features
@@ -393,7 +420,7 @@ f_scl_svd_tfidf = t_scl_svd_tfidf.fit_transform(f_svd_tfidf)
 
 # Counters features
 # min_df=3, strip_accents='unicode', token_pattern=r'\w{1,}', sublinear_tf=1,
-t_count = CountVectorizer(stop_words="english", ngram_range=(1, 3))
+t_count = CountVectorizer(stop_words="english", ngram_range=(1, 3), min_df=3)
 f_count = t_count.fit_transform(data_full.text)
 
 # Counters with SVD features
@@ -404,10 +431,6 @@ f_svd_count = t_svd_count.fit_transform(f_count.astype(float))  # float
 # Counter with SVD and Scale features
 t_scl_svd_count = StandardScaler()
 f_scl_svd_count = t_scl_svd_count.fit_transform(f_svd_count)
-
-# ### Stems based 6 features
-
-# In[27]:
 
 stemmer = nltk.stem.PorterStemmer()
 
@@ -425,11 +448,9 @@ def tokenize_s(text):
     return stems
 
 
-# In[28]:
-
 # TFIDF features
 t_tfidf_s = TfidfVectorizer(
-    tokenizer=tokenize_s, stop_words="english", ngram_range=(1, 3))
+    tokenizer=tokenize_s, stop_words="english", ngram_range=(1, 3), min_df=3)
 f_tfidf_s = t_tfidf_s.fit_transform(data_full.text)
 
 # TFIDF with SVD features
@@ -443,7 +464,7 @@ f_scl_svd_tfidf_s = t_scl_svd_tfidf_s.fit_transform(f_svd_tfidf_s)
 
 # Counters features
 t_count_s = CountVectorizer(
-    tokenizer=tokenize_s, stop_words="english", ngram_range=(1, 3))
+    tokenizer=tokenize_s, stop_words="english", ngram_range=(1, 3), min_df=3)
 f_count_s = t_count_s.fit_transform(data_full.text)
 
 # Counters with SVD features
@@ -454,10 +475,6 @@ f_svd_count_s = t_svd_count_s.fit_transform(f_count_s.astype(float))
 # Counters with SVD and Scale features
 t_scl_svd_count_s = StandardScaler()
 f_scl_svd_count_s = t_scl_svd_count_s.fit_transform(f_svd_count_s)
-
-# ### Lemmas based 6 features
-
-# In[29]:
 
 lemmatizer = nltk.stem.WordNetLemmatizer()
 
@@ -472,11 +489,9 @@ def tokenize_l(text):
     return lemms
 
 
-# In[30]:
-
 # TFIDF features
 t_tfidf_l = TfidfVectorizer(
-    tokenizer=tokenize_l, stop_words="english", ngram_range=(1, 3))
+    tokenizer=tokenize_l, stop_words="english", ngram_range=(1, 3), min_df=3)
 f_tfidf_l = t_tfidf_l.fit_transform(data_full.text)
 
 # TFIDF with SVD features
@@ -490,7 +505,7 @@ f_scl_svd_tfidf_l = t_scl_svd_tfidf_l.fit_transform(f_svd_tfidf_l)
 
 # Counters features
 t_count_l = CountVectorizer(
-    tokenizer=tokenize_l, stop_words="english", ngram_range=(1, 3))
+    tokenizer=tokenize_l, stop_words="english", ngram_range=(1, 3), min_df=3)
 f_count_l = t_count_l.fit_transform(data_full.text)
 
 # Counters with SVD features
@@ -502,13 +517,9 @@ f_svd_count_l = t_svd_count_l.fit_transform(f_count_l.astype(float))
 t_scl_svd_count_l = StandardScaler()
 f_scl_svd_count_l = t_scl_svd_count_l.fit_transform(f_svd_count_l)
 
-# ## Char 6 featurs
-
-# In[31]:
-
 # TFIDF features
 t_tfidf_c = TfidfVectorizer(
-    analyzer="char", stop_words="english", ngram_range=(1, 7))
+    analyzer="char", stop_words="english", ngram_range=(1, 5), min_df=3)
 f_tfidf_c = t_tfidf_c.fit_transform(data_full.text)
 
 # TFIDF with SVD features
@@ -522,7 +533,7 @@ f_scl_svd_tfidf_c = t_scl_svd_tfidf_c.fit_transform(f_svd_tfidf_c)
 
 # Counter features
 t_count_c = CountVectorizer(
-    analyzer="char", stop_words="english", ngram_range=(1, 7))
+    analyzer="char", stop_words="english", ngram_range=(1, 5), min_df=3)
 f_count_c = t_count_c.fit_transform(data_full.text)
 
 # Counter with SVD features
@@ -533,10 +544,6 @@ f_svd_count_c = t_svd_count_c.fit_transform(f_count_c.astype(float))
 # Counter with SVD and Scale features
 t_scl_svd_count_c = StandardScaler()
 f_scl_svd_count_c = t_scl_svd_count_c.fit_transform(f_svd_count_c)
-
-# ## Markov event based features
-
-# In[32]:
 
 
 class Dictogram(dict):
@@ -558,9 +565,6 @@ class Dictogram(dict):
                 self[item] = 1
                 self.types += 1
                 self.tokens += 1
-
-
-# In[33]:
 
 
 # markov chain based features, order words memory
@@ -617,8 +621,6 @@ def text_to_char_list(raw):
     return char_list
 
 
-# In[34]:
-
 start_order, end_order = 2, 5  # [start_order, end_order)
 
 data_full['splited_char_list'] = data_full.apply(
@@ -652,8 +654,6 @@ for order in range(start_order, end_order):
 
 del data_full['splited_char_list']
 
-# In[35]:
-
 from sklearn.preprocessing import normalize
 from sklearn.preprocessing import StandardScaler
 
@@ -673,52 +673,9 @@ for ii in range(end_order - start_order):
         np.hstack((f_markov_tt, f_markov_tt2, f_markov_tt3)))
 f_markov_orders = np.hstack(f_markov_orders_t)
 
-#print(eap_MM[('n', 'o', 'm', 'e')])
-#print(sum([x for x in eap_MM[('n', 'o', 'm', 'e')].values()]))
-#print(eap_MM[('n', 'o', 'm', 'e')]['r'])
-#print(eap_MM[('n', 'o', 'm', 'e')]['r'] / sum([x for x in eap_MM[('n', 'o', 'm', 'e')].values()]))
+print(f_markov_orders[:10])
 
-# ## Sentence vector features
-
-# ### word2vec
-
-# Load Google's pre-trained Word2Vec model.
-word2vec = gensim.models.KeyedVectors.load_word2vec_format(
-    '../model/GoogleNews-vectors-negative300.bin', binary=True)
-
-
-def sent2vec(sentence):
-    stopwords = nltk.corpus.stopwords.words('english')
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-
-    text_list = tokenizer.tokenize(sentence.lower())
-    text_list = [w for w in text_list if w not in stopwords]
-    text_list = [w for w in text_list if w.isalpha()]
-
-    M = []
-    for w in text_list:
-        try:
-            M.append(word2vec[w])
-        except:
-            continue
-    M = np.array(M)
-    v = M.sum(axis=0)
-    if type(v) != np.ndarray:
-        return np.zeros(300)
-    return v / np.sqrt((v**2).sum())
-
-
-sent2v = [sent2vec(x) for x in data_full.text]
-f_sent2v = np.array(sent2v)
-print(f_sent2v[0])
-
-#sve_train = np.load('../model/sve_train.npy')
-#sve_test = np.load('../model/sve_test.npy')
-
-#f_sent2v_t = np.concatenate((sve_train, sve_test), axis=0)
-#print(f_sent2v_t[0])
-
-# ### glove
+#word2vec = gensim.models.KeyedVectors.load_word2vec_format('../model/GoogleNews-vectors-negative300.bin', binary=True)
 
 glove_file = '../model/glove.840B.300d.txt'
 
@@ -737,9 +694,68 @@ def loadGloveEmbeddings(glove_file):
     return embeddings_index
 
 
-glove2vec = loadGloveEmbeddings(glove_file)
+#glove2vec = loadGloveEmbeddings(glove_file)
 
-# ## Sentiment Analysis based features
+
+def sent2vec(sentence, word2vec):
+    #stopwords = nltk.corpus.stopwords.words('english')
+    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
+
+    text_list = tokenizer.tokenize(sentence.lower())
+    #text_list = [w for w in text_list if w not in stopwords]
+    text_list = [w for w in text_list if w.isalpha()]
+
+    M = []
+    for w in text_list:
+        try:
+            M.append(word2vec[w])
+        except:
+            continue
+    M = np.array(M)
+    v = M.sum(axis=0)
+    if type(v) != np.ndarray:
+        return np.zeros(300)
+    return v / np.sqrt((v**2).sum())
+
+
+#w2v_sent2v = [sent2vec(x, word2vec) for x in data_full.text]
+#f_w2v_sent2v = np.array(w2v_sent2v)
+#glv_sent2v = [sent2vec(x, glove2vec) for x in data_full.text]
+#f_glv_sent2v = np.array(glv_sent2v)
+
+#np.save('../model/f_w2v_sent2v', f_w2v_sent2v)
+#np.save('../model/f_glv_sent2v', f_glv_sent2v)
+f_w2v_sent2v = np.load('../model/f_w2v_sent2v.npy')
+f_glv_sent2v = np.load('../model/f_glv_sent2v.npy')
+
+t_scl_w2v_sent2v = StandardScaler()
+f_scl_w2v_sent2v = t_scl_w2v_sent2v.fit_transform(f_w2v_sent2v)
+t_scl_glv_sent2v = StandardScaler()
+f_scl_glv_sent2v = t_scl_glv_sent2v.fit_transform(f_glv_sent2v)
+
+# Sentiment
+afinn = Afinn()
+sia = SentimentIntensityAnalyzer()
+
+
+def get_senti_score(text):
+    return afinn.score(text)
+
+
+def sentiment_nltk(text):
+    res = sia.polarity_scores(text)
+    res_senti = []
+    for i in res:
+        res_senti.append(res[i])
+    return res_senti
+
+
+f_senti = np.array([get_senti_score(text) for text in data_full.text]).reshape(
+    data_full.shape[0], -1)
+
+f_nltk_senti = np.array([sentiment_nltk(text)
+                         for text in data_full.text]).reshape(
+                             data_full.shape[0], -1)
 
 
 def apply_nn_model(features,
@@ -747,16 +763,16 @@ def apply_nn_model(features,
                    input_dim=None,
                    embedding_dims=None,
                    max_len=None,
-                   embedding_matrix=None):
-    #assert model_name in ('nn_model', 'sent2vec_model', 'fasttext_model', 'lstm_model', 'bi_lstm_model', 'gru_model')
+                   embedding_matrix=None,
+                   epochs=25,
+                   patience=2):
 
     n_splits = 5
     kf = model_selection.KFold(
         n_splits=n_splits, shuffle=True, random_state=2017)
 
-    epochs = 100
     earlyStopping = EarlyStopping(
-        monitor='val_loss', patience=2, verbose=0, mode='auto')
+        monitor='val_loss', patience=patience, verbose=0, mode='auto')
 
     x_train = features[np.nonzero(i_train)]
     x_test = features[np.nonzero(i_test)]
@@ -773,26 +789,10 @@ def apply_nn_model(features,
         model = model_func(input_dim, embedding_dims, max_len,
                            embedding_matrix)
 
-        #if model_name is 'nn_model':
-        #    model = nn_model(input_dim, embedding_dims, max_len)
-        #elif model_name is 'sent2vec_model':
-        #    model = sent2vec_model()
-        #elif model_name is 'fasttext_model':
-        #    model = fasttext_model(input_dim, embedding_dims)
-        #elif model_name is 'lstm_model':
-        #    model = lstm_model(input_dim, embedding_dims, max_len,
-        #                       embedding_matrix)
-        #elif model_name is 'bi_lstm_model':
-        #    model = bi_lstm_model(input_dim, embedding_dims, max_len,
-        #                          embedding_matrix)
-        #elif model_name is 'gru_model':
-        #    model = gru_model(input_dim, embedding_dims, max_len,
-        #                      embedding_matrix)
-
         model.fit(
             x_dev,
             y_dev,
-            batch_size=32,
+            batch_size=512,
             validation_data=(x_val, y_val),
             epochs=epochs,
             callbacks=[earlyStopping])
@@ -806,6 +806,109 @@ def apply_nn_model(features,
 
     p_full = np.concatenate((pred_train, pred_full_test), axis=0)
     return pd.DataFrame(p_full)
+
+
+# Separate punctuation from words
+# Remove lower frequency words ( <= 2)
+# Cut a longer document which contains 256 words
+def fasttext_preprocess(text):
+    text = text.replace("' ", " ' ")
+    signs = set(',.:;"?!')
+    prods = set(text) & signs
+    if not prods:
+        return text
+
+    for sign in prods:
+        text = text.replace(sign, ' {} '.format(sign))
+    return text
+
+
+def create_docs(df, n_gram_max=2):
+    def add_ngram(q, n_gram_max):
+        ngrams = []
+        for n in range(2, n_gram_max + 1):
+            for w_index in range(len(q) - n + 1):
+                ngrams.append('--'.join(q[w_index:w_index + n]))
+        return q + ngrams
+
+    docs = []
+    for doc in df.text:
+        doc = fasttext_preprocess(doc).split()
+        docs.append(' '.join(add_ngram(doc, n_gram_max)))
+
+    return docs
+
+
+"""
+min_count = 2
+ft_max_len = 90  # docs mean len: 79.2660255264
+
+docs = create_docs(data_full)
+tokenizer = Tokenizer(lower=False, filters='')
+tokenizer.fit_on_texts(docs)
+
+ft_num_words = sum(
+    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
+
+tokenizer = Tokenizer(num_words=ft_num_words, lower=True, filters='')
+tokenizer.fit_on_texts(docs)
+f_ft_docs_seq = tokenizer.texts_to_sequences(docs)
+f_ft_docs_pad = pad_sequences(sequences=f_ft_docs_seq, maxlen=ft_max_len)
+
+print(ft_num_words, len(tokenizer.word_index), np.max(f_ft_docs_pad))
+"""
+
+
+def text_preprocess(text):
+    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
+
+    word_list = tokenizer.tokenize(text.lower())
+    word_list = [w for w in word_list if w.isalpha()]
+    ret_text = " ".join([w for w in word_list])
+
+    return ret_text
+
+
+"""
+min_count = 2
+max_len = 70
+
+pre_text = [text_preprocess(x) for x in data_full.text]
+tokenizer = Tokenizer(lower=False, filters='')
+tokenizer.fit_on_texts(pre_text)
+
+num_words = sum(
+    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
+
+tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
+tokenizer.fit_on_texts(pre_text)
+f_text_seq = tokenizer.texts_to_sequences(pre_text)
+f_text_pad = pad_sequences(sequences=f_text_seq, maxlen=max_len)
+
+word_index = tokenizer.word_index
+print('Found %s unique tokens.' % len(word_index))
+
+print(num_words, len(word_index), np.max(f_text_pad))
+"""
+
+
+def get_embedding_matrix(word_index, word2vec):
+    # create an embedding matrix for the words we have in the dataset
+    embedding_matrix = np.zeros((len(word_index) + 1, 300))
+    for word, i in tqdm(word_index.items()):
+        try:
+            embedding_vector = word2vec[word]
+        except:
+            continue
+        if embedding_vector is not None:
+            embedding_matrix[i] = embedding_vector
+    return embedding_matrix
+
+
+"""
+w2v_embedding_matrix = get_embedding_matrix(word_index, word2vec)
+glv_embedding_matrix = get_embedding_matrix(word_index, glove2vec)
+"""
 
 
 def nn_model(input_dim, embedding_dims, max_len, embedding_matrix):
@@ -831,28 +934,21 @@ def nn_model(input_dim, embedding_dims, max_len, embedding_matrix):
     return model
 
 
-#max_len = 35
-max_len = 70
-num_words = 10000
+#p_nn = apply_nn_model(
+#    f_text_pad,
+#    nn_model,
+#    input_dim=min(num_words, len(word_index)) + 1,
+#    embedding_dims=32,
+#    max_len=max_len,
+#    epochs=5,
+#    patience=1)
 
-tokenizer = Tokenizer(num_words=num_words)
-tokenizer.fit_on_texts(list(data_full.text))
-f_nn_full_seq = tokenizer.texts_to_sequences(data_full.text)
-f_nn_full_pad = pad_sequences(sequences=f_nn_full_seq, maxlen=max_len)
-
-word_index = tokenizer.word_index
-print('Found %s unique tokens.' % len(word_index))
-
-# nn model
-input_dim = min(num_words, len(word_index)) + 1
-embedding_dims = 32
-max_len = 70
-p_nn = apply_nn_model(f_nn_full_pad, nn_model, input_dim, embedding_dims,
-                      max_len)
-
-# Sent2vec Neural Network
+print('p_nn')
+#p_nn.to_pickle('../model/p_nn.pkl')
+p_nn = pd.read_pickle('../model/p_nn.pkl')
 
 
+# no use input_dim, embedding_dims, max_len, embedding_matrix
 def sent2vec_model(input_dim, embedding_dims, max_len, embedding_matrix):
     # create a simple 3 layer sequential neural net
     model = Sequential()
@@ -870,7 +966,6 @@ def sent2vec_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model.add(Dense(3))
     model.add(Activation('softmax'))
 
-    # compile the model
     model.compile(
         loss='categorical_crossentropy',
         optimizer='adam',
@@ -878,42 +973,16 @@ def sent2vec_model(input_dim, embedding_dims, max_len, embedding_matrix):
     return model
 
 
-t_scl_sent2v_nn = StandardScaler()
-f_scl_sent2v_nn = t_scl_sent2v_nn.fit_transform(f_sent2v)
+#p_w2v_sent2v_nn = apply_nn_model(f_scl_w2v_sent2v, sent2vec_model, epochs=100, patience=2)
+#p_glv_sent2v_nn = apply_nn_model(f_scl_glv_sent2v, sent2vec_model, epochs=100, patience=2)
 
-# sent2vec nn model
-p_sent2v_nn = apply_nn_model(f_scl_sent2v_nn, sent2vec_model)
+#p_w2v_sent2v_nn.to_pickle('../model/p_w2v_sent2v_nn.pkl')
+#p_glv_sent2v_nn.to_pickle('../model/p_glv_sent2v_nn.pkl')
 
-
-# Separate punctuation from words
-# Remove lower frequency words ( <= 2)
-# Cut a longer document which contains 256 words
-def preprocessFastText(text):
-    text = text.replace("' ", " ' ")
-    signs = set(',.:;"?!')
-    prods = set(text) & signs
-    if not prods:
-        return text
-
-    for sign in prods:
-        text = text.replace(sign, ' {} '.format(sign))
-    return text
-
-
-def create_docs(df, n_gram_max=2):
-    def add_ngram(q, n_gram_max):
-        ngrams = []
-        for n in range(2, n_gram_max + 1):
-            for w_index in range(len(q) - n + 1):
-                ngrams.append('--'.join(q[w_index:w_index + n]))
-        return q + ngrams
-
-    docs = []
-    for doc in df.text:
-        doc = preprocessFastText(doc).split()
-        docs.append(' '.join(add_ngram(doc, n_gram_max)))
-
-    return docs
+print('p_w2v_sent2v_nn')
+p_w2v_sent2v_nn = pd.read_pickle('../model/p_w2v_sent2v_nn.pkl')
+print('p_glv_sent2v_nn')
+p_glv_sent2v_nn = pd.read_pickle('../model/p_glv_sent2v_nn.pkl')
 
 
 def fasttext_model(input_dim, embedding_dims, max_len, embedding_matrix):
@@ -929,86 +998,19 @@ def fasttext_model(input_dim, embedding_dims, max_len, embedding_matrix):
     return model
 
 
-min_count = 2
-max_len = 90
+#p_fasttext = apply_nn_model(
+#    f_ft_docs_pad,
+#    fasttext_model,
+#    input_dim=np.max(f_ft_docs_pad) + 1,
+#    embedding_dims=20,
+#    max_len=ft_max_len,
+#    embedding_matrix=None,
+#    epochs=100,
+#    patience=2)
+#p_fasttext.to_pickle('../model/p_fasttext.pkl')
 
-docs = create_docs(data_full)
-tokenizer = Tokenizer(lower=False, filters='')
-tokenizer.fit_on_texts(docs)
-
-num_words = sum(
-    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
-
-tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
-tokenizer.fit_on_texts(docs)
-f_ft_docs_seq = tokenizer.texts_to_sequences(docs)
-f_ft_docs_pad = pad_sequences(sequences=f_ft_docs_seq, maxlen=max_len)
-
-# fasttext model
-input_dim = np.max(f_ft_docs_pad) + 1
-embedding_dims = 20
-p_fasttext = apply_nn_model(f_ft_docs_pad, fasttext_model, input_dim,
-                            embedding_dims)
-
-# Word2vec Neural Network
-
-
-# preprocessing
-def text_preprocess(sentence):
-    #stopwords = nltk.corpus.stopwords.words('english')
-    tokenizer = nltk.tokenize.RegexpTokenizer(r'\w+')
-
-    text_list = tokenizer.tokenize(sentence.lower())
-    #text_list = [w for w in text_list if w not in stopwords]
-    text_list = [w for w in text_list if w.isalpha()]
-    txt = " ".join([w for w in text_list])
-
-    return txt
-
-
-min_count = 2
-max_len = 70
-
-pre_text = [text_preprocess(x) for x in data_full.text]
-tokenizer = Tokenizer(lower=False, filters='')
-tokenizer.fit_on_texts(pre_text)
-
-num_words = sum(
-    [1 for _, v in tokenizer.word_counts.items() if v >= min_count])
-
-tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
-tokenizer.fit_on_texts(pre_text)
-f_w2v_text_seq = tokenizer.texts_to_sequences(pre_text)
-f_w2v_text_pad = pad_sequences(sequences=f_w2v_text_seq, maxlen=max_len)
-
-word_index = tokenizer.word_index
-
-
-def get_embedding_matrix(word_index, word2vec):
-    # create an embedding matrix for the words we have in the dataset
-    embedding_matrix = np.zeros((len(word_index) + 1, 300))
-    for word, i in tqdm(word_index.items()):
-        try:
-            embedding_vector = word2vec[word]
-        except:
-            continue
-        if embedding_vector is not None:
-            embedding_matrix[i] = embedding_vector
-    return embedding_matrix
-
-
-w2v_embedding_matrix = get_embedding_matrix(word_index, word2vec)
-glv_embedding_matrix = get_embedding_matrix(word_index, glove2vec)
-
-print(data_full.text[0])
-print(pre_text[0])
-print(f_w2v_text_pad[0])
-print(len(word_index))
-print(word_index['process'])
-print(word2vec['process'])
-print(w2v_embedding_matrix[3351])
-print(glove2vec['process'])
-print(glv_embedding_matrix[3351])
+print('p_fasttext above')
+p_fasttext = pd.read_pickle('../model/p_fasttext.pkl')
 
 
 def lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
@@ -1023,14 +1025,10 @@ def lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model.add(SpatialDropout1D(0.3))
     model.add(LSTM(300, dropout=0.3, recurrent_dropout=0.3))
 
-    model.add(Dense(1024))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
+    model.add(Dense(1024, activation='relu'))
     model.add(Dropout(0.8))
 
-    model.add(Dense(1024))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
+    model.add(Dense(1024, activation='relu'))
     model.add(Dropout(0.8))
 
     model.add(Dense(3))
@@ -1043,27 +1041,34 @@ def lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
     return model
 
 
-# w2v lstm model
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 70
-embedding_matrix = w2v_embedding_matrix
-p_w2v_lstm = apply_nn_model(f_w2v_text_pad, lstm_model, input_dim,
-                            embedding_dims, max_len, embedding_matrix)
+#p_w2v_lstm = apply_nn_model(
+#    f_text_pad,
+#    lstm_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    max_len=max_len,
+#    embedding_matrix=w2v_embedding_matrix,
+#    epochs=100,
+#    patience=5)
 
-p_w2v_lstm.to_pickle('../model/p_w2v_lstm.pkl')
-#p_w2v_lstm = pd.read_pickle('../model/p_w2v_lstm.pkl')
+#p_w2v_lstm.to_pickle('../model/p_w2v_lstm.pkl')
 
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 70
-embedding_matrix = glv_embedding_matrix
-p_glv_lstm = apply_nn_model(f_w2v_text_pad, lstm_model, input_dim,
-                            embedding_dims, max_len, embedding_matrix)
+#p_glv_lstm = apply_nn_model(
+#    f_text_pad,
+#    lstm_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    max_len=max_len,
+#    embedding_matrix=glv_embedding_matrix,
+#    epochs=100,
+#    patience=3)
 
-p_glv_lstm.to_pickle('../model/p_glv_lstm.pkl')
+#p_glv_lstm.to_pickle('../model/p_glv_lstm.pkl')
 
-#p_glv_lstm = pd.read_pickle('../model/p_glv_lstm.pkl')
+print('p_w2v_lstm')
+p_w2v_lstm = pd.read_pickle('../model/p_w2v_lstm.pkl')
+print('p_glv_lstm')
+p_glv_lstm = pd.read_pickle('../model/p_glv_lstm.pkl')
 
 
 def bi_lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
@@ -1078,14 +1083,10 @@ def bi_lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
     model.add(SpatialDropout1D(0.3))
     model.add(Bidirectional(LSTM(300, dropout=0.3, recurrent_dropout=0.3)))
 
-    model.add(Dense(1024))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
+    model.add(Dense(1024, activation='relu'))
     model.add(Dropout(0.8))
 
-    model.add(Dense(1024))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
+    model.add(Dense(1024, activation='relu'))
     model.add(Dropout(0.8))
 
     model.add(Dense(3))
@@ -1098,27 +1099,34 @@ def bi_lstm_model(input_dim, embedding_dims, max_len, embedding_matrix):
     return model
 
 
-# bi lstm model
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 70
-embedding_matrix = w2v_embedding_matrix
-p_w2v_bi_lstm = apply_nn_model(f_w2v_text_pad, bi_lstm_model, input_dim,
-                               embedding_dims, max_len, embedding_matrix)
+#p_w2v_bi_lstm = apply_nn_model(
+#    f_text_pad,
+#    bi_lstm_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    max_len=max_len,
+#    embedding_matrix=w2v_embedding_matrix,
+#    epochs=100,
+#    patience=5)
 
-p_w2v_bi_lstm.to_pickle('../model/p_w2v_bi_lstm.pkl')
-#p_w2v_bi_lstm = pd.read_pickle('../model/p_w2v_bi_lstm.pkl')
+#p_w2v_bi_lstm.to_pickle('../model/p_w2v_bi_lstm.pkl')
 
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 70
-embedding_matrix = glv_embedding_matrix
-p_glv_bi_lstm = apply_nn_model(f_w2v_text_pad, bi_lstm_model, input_dim,
-                               embedding_dims, max_len, embedding_matrix)
+#p_glv_bi_lstm = apply_nn_model(
+#    f_text_pad,
+#    bi_lstm_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    max_len=max_len,
+#    embedding_matrix=glv_embedding_matrix,
+#    epochs=100,
+#    patience=3)
 
-p_glv_bi_lstm.to_pickle('../model/p_glv_bi_lstm.pkl')
+#p_glv_bi_lstm.to_pickle('../model/p_glv_bi_lstm.pkl')
 
-#p_glv_bi_lstm = pd.read_pickle('../model/p_glv_bi_lstm.pkl')
+print('p_w2v_bi_lstm')
+p_w2v_bi_lstm = pd.read_pickle('../model/p_w2v_bi_lstm.pkl')
+print('p_glv_bi_lstm')
+p_glv_bi_lstm = pd.read_pickle('../model/p_glv_bi_lstm.pkl')
 
 
 def gru_model(input_dim, embedding_dims, max_len, embedding_matrix):
@@ -1131,16 +1139,14 @@ def gru_model(input_dim, embedding_dims, max_len, embedding_matrix):
             input_length=max_len,
             trainable=False))
     model.add(SpatialDropout1D(0.3))
+    model.add(
+        GRU(300, dropout=0.3, recurrent_dropout=0.3, return_sequences=True))
     model.add(GRU(300, dropout=0.3, recurrent_dropout=0.3))
 
-    model.add(Dense(1024))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
+    model.add(Dense(1024, activation='relu'))
     model.add(Dropout(0.8))
 
-    model.add(Dense(1024))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
+    model.add(Dense(1024, activation='relu'))
     model.add(Dropout(0.8))
 
     model.add(Dense(3))
@@ -1152,31 +1158,78 @@ def gru_model(input_dim, embedding_dims, max_len, embedding_matrix):
     return model
 
 
-# gru model
+#p_w2v_gru = apply_nn_model(
+#    f_text_pad,
+#    gru_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    max_len=max_len,
+#    embedding_matrix=w2v_embedding_matrix,
+#    epochs=100,
+#    patience=5)
 
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 70
-embedding_matrix = w2v_embedding_matrix
-p_w2v_gru = apply_nn_model(f_w2v_text_pad, gru_model, input_dim,
-                           embedding_dims, max_len, embedding_matrix)
+#p_w2v_gru.to_pickle('../model/p_w2v_gru.pkl')
 
-p_w2v_gru.to_pickle('../model/p_w2v_gru.pkl')
-#p_w2v_gru = pd.read_pickle('../model/p_w2v_gru.pkl')
+#p_glv_gru = apply_nn_model(
+#    f_text_pad,
+#    gru_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    max_len=max_len,
+#    embedding_matrix=glv_embedding_matrix,
+#    epochs=100,
+#    patience=3)
 
-input_dim = len(word_index) + 1
-embedding_dims = 300
-max_len = 70
-embedding_matrix = glv_embedding_matrix
-p_glv_gru = apply_nn_model(f_w2v_text_pad, gru_model, input_dim,
-                           embedding_dims, max_len, embedding_matrix)
+#p_glv_gru.to_pickle('../model/p_glv_gru.pkl')
 
-p_glv_gru.to_pickle('../model/p_glv_gru.pkl')
-#p_glv_gru = pd.read_pickle('../model/p_glv_gru.pkl')
+print('p_w2v_gru')
+p_w2v_gru = pd.read_pickle('../model/p_w2v_gru.pkl')
+print('p_glv_gru')
+p_glv_gru = pd.read_pickle('../model/p_glv_gru.pkl')
 
-# # Ensembling & Stacking models
 
-# ## Helper functions
+# no use max_len
+def ex_fasttext_model(input_dim, embedding_dims, max_len, embedding_matrix):
+    model = Sequential()
+    model.add(
+        Embedding(
+            input_dim=input_dim,
+            output_dim=embedding_dims,
+            weights=[embedding_matrix]))
+    model.add(GlobalAveragePooling1D())
+    model.add(Dense(3, activation='softmax'))
+
+    model.compile(
+        loss='categorical_crossentropy',
+        optimizer='adam',
+        metrics=['accuracy'])
+    return model
+
+
+#p_w2v_ex_fasttext = apply_nn_model(
+#    f_text_pad,
+#    ex_fasttext_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    embedding_matrix=w2v_embedding_matrix,
+#    epochs=100,
+#    patience=3)
+#p_w2v_ex_fasttext.to_pickle('../model/p_w2v_ex_fasttext.pkl')
+
+#p_glv_ex_fasttext = apply_nn_model(
+#    f_text_pad,
+#    ex_fasttext_model,
+#    input_dim=len(word_index) + 1,
+#    embedding_dims=300,
+#    embedding_matrix=glv_embedding_matrix,
+#    epochs=100,
+#    patience=3)
+#p_glv_ex_fasttext.to_pickle('../model/p_glv_ex_fasttext.pkl')
+
+print('p_w2v_ex_fasttext')
+p_w2v_ex_fasttext = pd.read_pickle('../model/p_w2v_ex_fasttext.pkl')
+print('p_glv_ex_fasttext above')
+p_glv_ex_fasttext = pd.read_pickle('../model/p_glv_ex_fasttext.pkl')
 
 import scipy.sparse
 
@@ -1212,114 +1265,42 @@ def apply_model(model, features, evaluate=True, predict=False):
         return pd.DataFrame(p_full)
 
 
-# Confusion Matrix
-import itertools
-from sklearn.metrics import confusion_matrix
-
-
-def plot_confusion_matrix(cm,
-                          classes,
-                          normalize=False,
-                          title='Confusion matrix',
-                          cmap=plt.cm.Blues):
-    """
-    This function prints and plots the confusion matrix.
-    Normalization can be applied by setting `normalize=True`.
-    """
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-        print("Normalized confusion matrix")
-    else:
-        print('Confusion matrix, without normalization')
-
-    print(cm)
-
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45)
-    plt.yticks(tick_marks, classes)
-
-    fmt = '.2f' if normalize else 'd'
-    thresh = cm.max() / 2.
-    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(
-            j,
-            i,
-            format(cm[i, j], fmt),
-            horizontalalignment="center",
-            color="white" if cm[i, j] > thresh else "black")
-
-    plt.tight_layout()
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-
-
-# ## First level Predictions
-
-lr_param_grid = {'C': [0.1, 0.3, 1.0, 3.0, 10.0], 'penalty': ['l1', 'l2']}
-
-nb_param_grid = {'alpha': [0.01, 0.03, 0.1, 0.3, 1, 10, 100]}
-
-rf_param_grid = {
-    'n_estimators': [120, 300, 500, 800],
-    'max_features': ['log2', 'sqrt', None],
-    'max_depth': [5, 8, 15, 25, 30, None],
-    'min_samples_split': [0.1, 0.3, 1.0, 2, 5],
-    'min_samples_leaf': [1, 2, 5, 10, 20]
-}
-
-
-def get_best_parameters(clf, param_grid, features, y_train):
-    if any(map(lambda z: type(z) in [scipy.sparse.csr_matrix, scipy.sparse.csc_matrix, scipy.sparse.coo_matrix], features)):
-        hstack = scipy.sparse.hstack
-    else:
-        hstack = np.hstack
-
-    f_all = hstack(features)
-    f_train = f_all[np.nonzero(i_train)]
-
-    model = GridSearchCV(
-        estimator=clf,
-        param_grid=param_grid,
-        scoring='neg_log_loss',
-        cv=cv,
-        verbose=0,
-        n_jobs=-1)
-
-    model.fit(f_train, y_train)
-    best_parameters = model.best_estimator_.get_params()
-
-    return best_parameters
-
-
-# ### models using Basic features
-
 # lr model
 #lr_params = get_best_parameters(LogisticRegression(), lr_param_grid, f_basic, y_train)
 #for key, value in lr_params.items():
 #    print(key, value)
-p_lr_basic = apply_model(LogisticRegression(), f_basic, predict=True)
+p_lr_basic = apply_model(LogisticRegression(), (f_basic, ), predict=True)
 
 # nb model
-p_nb_basic = apply_model(MultinomialNB(), f_basic, predict=True)
+p_nb_basic = apply_model(MultinomialNB(), (f_basic, ), predict=True)
 
 # rf model
 p_rf_basic = apply_model(
     RandomForestClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
-    f_basic,
+    (f_basic, ),
     predict=True)
 
 # et model
 p_et_basic = apply_model(
     ExtraTreesClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
-    f_basic,
+    (f_basic, ),
     predict=True)
 
-# ### model using word based 6 features
-
-# In[50]:
+# xgb model
+p_xgb_basic = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_basic, ),
+    predict=True)
 
 # lr model
 p_lr_tfidf = apply_model(LogisticRegression(), (f_tfidf, ), predict=True)
@@ -1395,9 +1376,64 @@ p_et_scl_svd_count = apply_model(
     ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_scl_svd_count, ),
     predict=True)
 
-# ### model using word stems based 6 features
+# xgb model
+p_xgb_svd_tfidf = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_tfidf, ),
+    predict=True)
+p_xgb_scl_svd_tfidf = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_tfidf, ),
+    predict=True)
 
-# In[51]:
+p_xgb_svd_count = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_count, ),
+    predict=True)
+p_xgb_scl_svd_count = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_count, ),
+    predict=True)
 
 # lr model
 p_lr_tfidf_s = apply_model(LogisticRegression(), (f_tfidf_s, ), predict=True)
@@ -1473,9 +1509,64 @@ p_et_scl_svd_count_s = apply_model(
     ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_scl_svd_count_s, ),
     predict=True)
 
-# ### model using word lemmas based 6 features
+# xgb model
+p_xgb_svd_tfidf_s = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_tfidf_s, ),
+    predict=True)
+p_xgb_scl_svd_tfidf_s = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_tfidf_s, ),
+    predict=True)
 
-# In[52]:
+p_xgb_svd_count_s = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_count_s, ),
+    predict=True)
+p_xgb_scl_svd_count_s = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_count_s, ),
+    predict=True)
 
 # lr model
 p_lr_tfidf_l = apply_model(LogisticRegression(), (f_tfidf_l, ), predict=True)
@@ -1551,9 +1642,64 @@ p_et_scl_svd_count_l = apply_model(
     ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_scl_svd_count_l, ),
     predict=True)
 
-# ### model using char based 6 features
+# xgb model
+p_xgb_svd_tfidf_l = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_tfidf_l, ),
+    predict=True)
+p_xgb_scl_svd_tfidf_l = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_tfidf_l, ),
+    predict=True)
 
-# In[53]:
+p_xgb_svd_count_l = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_count_l, ),
+    predict=True)
+p_xgb_scl_svd_count_l = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_count_l, ),
+    predict=True)
 
 # lr model
 p_lr_tfidf_c = apply_model(LogisticRegression(), (f_tfidf_c, ), predict=True)
@@ -1629,9 +1775,64 @@ p_et_scl_svd_count_c = apply_model(
     ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_scl_svd_count_c, ),
     predict=True)
 
-# ### models using Markov event based features
+# xgb model
+p_xgb_svd_tfidf_c = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_tfidf_c, ),
+    predict=True)
+p_xgb_scl_svd_tfidf_c = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_tfidf_c, ),
+    predict=True)
 
-# In[54]:
+p_xgb_svd_count_c = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_svd_count_c, ),
+    predict=True)
+p_xgb_scl_svd_count_c = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_svd_count_c, ),
+    predict=True)
 
 # lr model
 p_lr_markov = apply_model(
@@ -1650,60 +1851,390 @@ p_et_markov = apply_model(
     ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_markov_orders, ),
     predict=True)
 
-# ### models using Sentence vector features
-
-# In[55]:
+# xgb model
+p_xgb_markov = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_markov_orders, ),
+    predict=True)
 
 # lr model
-p_lr_sent2v = apply_model(LogisticRegression(), (f_sent2v, ), predict=True)
+p_lr_w2v_sent2v = apply_model(
+    LogisticRegression(), (f_w2v_sent2v, ), predict=True)
+p_lr_scl_w2v_sent2v = apply_model(
+    LogisticRegression(), (f_scl_w2v_sent2v, ), predict=True)
+
+p_lr_glv_sent2v = apply_model(
+    LogisticRegression(), (f_glv_sent2v, ), predict=True)
+p_lr_scl_glv_sent2v = apply_model(
+    LogisticRegression(), (f_scl_glv_sent2v, ), predict=True)
 
 # nb model
-#p_nb_sent2v = apply_model(MultinomialNB(), (f_sent2v, ), predict=True)
 
 # rf model
-p_rf_sent2v = apply_model(
-    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_sent2v, ), predict=True)
+p_rf_w2v_sent2v = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_w2v_sent2v, ),
+    predict=True)
+p_rf_scl_w2v_sent2v = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_scl_w2v_sent2v, ),
+    predict=True)
+
+p_rf_glv_sent2v = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_glv_sent2v, ),
+    predict=True)
+p_rf_scl_glv_sent2v = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_scl_glv_sent2v, ),
+    predict=True)
 
 # et model
-p_et_sent2v = apply_model(
-    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_sent2v, ), predict=True)
+p_et_w2v_sent2v = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_w2v_sent2v, ),
+    predict=True)
+p_et_scl_w2v_sent2v = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_scl_w2v_sent2v, ),
+    predict=True)
 
-# ## Second-Level Predictions
+p_et_glv_sent2v = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_glv_sent2v, ),
+    predict=True)
+p_et_scl_glv_sent2v = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_scl_glv_sent2v, ),
+    predict=True)
+
+# xgb model
+p_xgb_w2v_sent2v = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_w2v_sent2v, ),
+    predict=True)
+p_xgb_scl_w2v_sent2v = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_w2v_sent2v, ),
+    predict=True)
+
+p_xgb_glv_sent2v = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_glv_sent2v, ),
+    predict=True)
+p_xgb_scl_glv_sent2v = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017), (f_scl_glv_sent2v, ),
+    predict=True)
+
+# lr model
+p_lr_big_intersections = apply_model(
+    LogisticRegression(), (f_big_intersections, ), predict=True)
+#p_lr_nor_big_intersections = apply_model(LogisticRegression(), (f_nor_big_intersections, ), predict=True)
+p_lr_trig_intersections = apply_model(
+    LogisticRegression(), (f_big_intersections, ), predict=True)
+#p_lr_nor_trig_intersections = apply_model(LogisticRegression(), (f_nor_trig_intersections, ), predict=True)
+
+#nb model
+p_nb_big_intersections = apply_model(
+    MultinomialNB(), (f_big_intersections, ), predict=True)
+p_nb_trig_intersections = apply_model(
+    MultinomialNB(), (f_trig_intersections, ), predict=True)
+#p_nb_nor_big_intersections = apply_model(MultinomialNB(), (f_nor_big_intersections, ), predict=True)
+#p_nb_nor_trig_intersections = apply_model(MultinomialNB(), (f_nor_trig_intersections, ), predict=True)
+
+# rf model
+#p_rf_big_intersections = apply_model(RandomForestClassifier(max_depth=6, n_jobs=-1),
+#                                         (f_big_intersections * 100, ), predict=True)
+#p_rf_trig_intersections = apply_model(RandomForestClassifier(max_depth=6, n_jobs=-1),
+#                                         (f_trig_intersections * 100, ), predict=True)
+#p_rf_nor_big_intersections = apply_model(RandomForestClassifier(max_depth=6, n_jobs=-1),
+#                                         (f_nor_big_intersections, ), predict=True)
+#p_rf_nor_trig_intersections = apply_model(RandomForestClassifier(max_depth=6, n_jobs=-1),
+#                                         (f_nor_trig_intersections, ), predict=True)
+
+# et model
+p_et_big_intersections = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_big_intersections, ),
+    predict=True)
+p_et_trig_intersections = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_trig_intersections, ),
+    predict=True)
+#p_et_nor_big_intersections = apply_model(ExtraTreesClassifier(max_depth=6, n_jobs=-1),
+#                                         (f_nor_big_intersections, ), predict=True)
+#p_et_nor_trig_intersections = apply_model(ExtraTreesClassifier(max_depth=6, n_jobs=-1),
+#                                         (f_nor_trig_intersections, ), predict=True)
+
+# lr model
+p_lr_senti = apply_model(LogisticRegression(), (f_senti, ), predict=True)
+p_lr_nltk_senti = apply_model(
+    LogisticRegression(), (f_nltk_senti, ), predict=True)
+
+# nb model
+#p_nb_senti = apply_model(MultinomialNB(), (f_senti, ), predict=True)
+
+# rf model
+p_rf_senti = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_senti, ), predict=True)
+p_rf_nltk_senti = apply_model(
+    RandomForestClassifier(max_depth=6, n_jobs=-1), (f_nltk_senti, ),
+    predict=True)
+
+# et model
+p_et_senti = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_senti, ), predict=True)
+p_et_nltk_senti = apply_model(
+    ExtraTreesClassifier(max_depth=6, n_jobs=-1), (f_nltk_senti, ),
+    predict=True)
+
+# xgb model
+#p_xgb_senti = apply_model(
+#    xgb.XGBClassifier(
+#        learning_rate=0.1,
+#        n_estimators=100,
+#        max_depth=5,
+#        min_child_weight=1,
+#        subsample=0.8,
+#        colsample_bytree=0.5,
+#        missing=-999,
+#        nthread=-1,
+#        silent=1,
+#        objective='multi:softprob',
+#        seed=2017), (f_senti, ),
+#    predict=True)
+#p_xgb_nltk_senti = apply_model(
+#    xgb.XGBClassifier(
+#        learning_rate=0.1,
+#        n_estimators=100,
+#        max_depth=5,
+#        min_child_weight=1,
+#        subsample=0.8,
+#        colsample_bytree=0.5,
+#        missing=-999,
+#        nthread=-1,
+#        silent=1,
+#        objective='multi:softprob',
+#        seed=2017), (f_nltk_senti, ),
+#predict=True)
 
 # non-negative
-f_all_nne_features = f_basic + (
-    p_lr_basic, p_nb_basic, p_rf_basic, p_et_basic, p_lr_tfidf, p_lr_svd_tfidf,
-    p_lr_scl_svd_tfidf, p_lr_count, p_lr_svd_count, p_lr_scl_svd_count,
-    p_nb_tfidf, p_nb_count, p_rf_tfidf, p_rf_svd_tfidf, p_rf_scl_svd_tfidf,
-    p_rf_count, p_rf_svd_count, p_rf_scl_svd_count, p_et_tfidf, p_et_svd_tfidf,
-    p_et_scl_svd_tfidf, p_et_count, p_et_svd_count, p_et_scl_svd_count,
-    p_lr_tfidf_s, p_lr_svd_tfidf_s, p_lr_scl_svd_tfidf_s, p_lr_count_s,
-    p_lr_svd_count_s, p_lr_scl_svd_count_s, p_nb_tfidf_s, p_nb_count_s,
-    p_rf_tfidf_s, p_rf_svd_tfidf_s, p_rf_scl_svd_tfidf_s, p_rf_count_s,
-    p_rf_svd_count_s, p_rf_scl_svd_count_s, p_et_tfidf_s, p_et_svd_tfidf_s,
-    p_et_scl_svd_tfidf_s, p_et_count_s, p_et_svd_count_s, p_et_scl_svd_count_s,
-    p_lr_tfidf_l, p_lr_svd_tfidf_l, p_lr_scl_svd_tfidf_l, p_lr_count_l,
-    p_lr_svd_count_l, p_lr_scl_svd_count_l, p_nb_tfidf_l, p_nb_count_l,
-    p_rf_tfidf_l, p_rf_svd_tfidf_l, p_rf_scl_svd_tfidf_l, p_rf_count_l,
-    p_rf_svd_count_l, p_rf_scl_svd_count_l, p_et_tfidf_l, p_et_svd_tfidf_l,
-    p_et_scl_svd_tfidf_l, p_et_count_l, p_et_svd_count_l, p_et_scl_svd_count_l,
-    p_lr_tfidf_c, p_lr_svd_tfidf_c, p_lr_scl_svd_tfidf_c, p_lr_count_c,
-    p_lr_svd_count_c, p_lr_scl_svd_count_c, p_nb_tfidf_c, p_nb_count_c,
-    p_rf_tfidf_c, p_rf_svd_tfidf_c, p_rf_scl_svd_tfidf_c, p_rf_count_c,
-    p_rf_svd_count_c, p_rf_scl_svd_count_c, p_et_tfidf_c, p_et_svd_tfidf_c,
-    p_et_scl_svd_tfidf_c, p_et_count_c, p_et_svd_count_c, p_et_scl_svd_count_c,
-    p_lr_markov, p_rf_markov, p_et_markov, p_lr_sent2v, p_lr_sent2v,
-    p_lr_sent2v, p_nn, p_sent2v_nn, p_fasttext, p_w2v_lstm, p_w2v_bi_lstm,
-    p_w2v_gru, p_glv_lstm, p_glv_bi_lstm, p_glv_gru)
+#f_all_nne_features = tuple(f_basic) + (
+f_all_nne_features = (
+    f_basic,
+    p_lr_basic,
+    p_nb_basic,
+    p_rf_basic,
+    p_et_basic,
+    p_xgb_basic,
+    p_lr_tfidf,
+    p_lr_svd_tfidf,
+    p_lr_scl_svd_tfidf,
+    p_lr_count,
+    #p_lr_svd_count,
+    #p_lr_scl_svd_count,
+    p_nb_tfidf,
+    p_nb_count,
+    #p_rf_tfidf,
+    p_rf_svd_tfidf,
+    p_rf_scl_svd_tfidf,
+    #p_rf_count,
+    #p_rf_svd_count,
+    #p_rf_scl_svd_count,
+    #p_et_tfidf,
+    #p_et_svd_tfidf,
+    #p_et_scl_svd_tfidf,
+    #p_et_count,
+    #p_et_svd_count,
+    #p_et_scl_svd_count,
+    p_xgb_svd_tfidf,
+    p_xgb_scl_svd_tfidf,
+    p_xgb_svd_count,
+    p_xgb_scl_svd_count,
+    p_lr_tfidf_s,
+    p_lr_svd_tfidf_s,
+    p_lr_scl_svd_tfidf_s,
+    p_lr_count_s,
+    p_lr_svd_count_s,
+    p_lr_scl_svd_count_s,
+    p_nb_tfidf_s,
+    p_nb_count_s,
+    #p_rf_tfidf_s,
+    p_rf_svd_tfidf_s,
+    p_rf_scl_svd_tfidf_s,
+    #p_rf_count_s,
+    p_rf_svd_count_s,
+    p_rf_scl_svd_count_s,
+    #p_et_tfidf_s,
+    #p_et_svd_tfidf_s,
+    #p_et_scl_svd_tfidf_s,
+    #p_et_count_s,
+    #p_et_svd_count_s,
+    #p_et_scl_svd_count_s,
+    p_xgb_svd_tfidf_s,
+    p_xgb_scl_svd_tfidf_s,
+    p_xgb_svd_count_s,
+    p_xgb_scl_svd_count_s,
+    p_lr_tfidf_l,
+    p_lr_svd_tfidf_l,
+    p_lr_scl_svd_tfidf_l,
+    p_lr_count_l,
+    p_lr_svd_count_l,
+    p_lr_scl_svd_count_l,
+    p_nb_tfidf_l,
+    p_nb_count_l,
+    #p_rf_tfidf_l,
+    p_rf_svd_tfidf_l,
+    p_rf_scl_svd_tfidf_l,
+    #p_rf_count_l,
+    p_rf_svd_count_l,
+    p_rf_scl_svd_count_l,
+    #p_et_tfidf_l,
+    #p_et_svd_tfidf_l,
+    #p_et_scl_svd_tfidf_l,
+    #p_et_count_l,
+    #p_et_svd_count_l,
+    #p_et_scl_svd_count_l,
+    p_xgb_svd_tfidf_l,
+    p_xgb_scl_svd_tfidf_l,
+    p_xgb_svd_count_l,
+    p_xgb_scl_svd_count_l,
+    p_lr_tfidf_c,
+    p_lr_svd_tfidf_c,
+    p_lr_scl_svd_tfidf_c,
+    p_lr_count_c,
+    p_lr_svd_count_c,
+    p_lr_scl_svd_count_c,
+    p_nb_tfidf_c,
+    #p_nb_count_c,
+    #p_rf_tfidf_c,
+    #p_rf_svd_tfidf_c,
+    #p_rf_scl_svd_tfidf_c,
+    #p_rf_count_c,
+    #p_rf_svd_count_c,
+    #p_rf_scl_svd_count_c,
+    #p_et_tfidf_c,
+    #p_et_svd_tfidf_c,
+    #p_et_scl_svd_tfidf_c,
+    #p_et_count_c,
+    #p_et_svd_count_c,
+    #p_et_scl_svd_count_c,
+    p_xgb_svd_tfidf_c,
+    p_xgb_scl_svd_tfidf_c,
+    p_xgb_svd_count_c,
+    p_xgb_scl_svd_count_c,
+    p_lr_markov,
+    p_rf_markov,
+    p_et_markov,
+    p_xgb_markov,
+    p_lr_w2v_sent2v,
+    p_lr_scl_w2v_sent2v,
+    p_lr_glv_sent2v,
+    p_lr_scl_glv_sent2v,
+    #p_rf_w2v_sent2v,
+    #p_rf_scl_w2v_sent2v,
+    #p_rf_glv_sent2v,
+    #p_rf_scl_glv_sent2v,
+    #p_et_w2v_sent2v,
+    #p_et_scl_w2v_sent2v,
+    #p_et_glv_sent2v,
+    #p_et_scl_glv_sent2v,
+    p_xgb_w2v_sent2v,
+    p_xgb_scl_w2v_sent2v,
+    p_xgb_glv_sent2v,
+    p_xgb_scl_glv_sent2v,
+    p_nn,
+    p_w2v_sent2v_nn,
+    p_glv_sent2v_nn,
+    p_fasttext,
+    p_w2v_lstm,
+    p_glv_lstm,
+    p_w2v_bi_lstm,
+    p_glv_bi_lstm,
+    p_w2v_gru,
+    p_glv_gru,
+    p_w2v_ex_fasttext,
+    p_glv_ex_fasttext,
+    #p_lr_big_intersections,
+    #p_lr_trig_intersections,
+    #p_nb_big_intersections,
+    #p_nb_trig_intersections,
+    #p_et_big_intersections,
+    #p_et_trig_intersections,
+    #p_lr_senti,
+    #p_lr_nltk_senti,
+    #p_rf_senti,
+    #p_rf_nltk_senti,
+    #p_et_senti,
+    #p_et_nltk_senti
+)
 
 f_all_features = f_all_nne_features + (
     f_svd_tfidf, f_scl_svd_tfidf, f_svd_count, f_scl_svd_count, f_svd_tfidf_s,
     f_scl_svd_tfidf_s, f_svd_count_s, f_scl_svd_count_s, f_svd_tfidf_l,
     f_scl_svd_tfidf_l, f_svd_count_l, f_scl_svd_count_l, f_svd_tfidf_c,
     f_scl_svd_tfidf_c, f_svd_count_c, f_scl_svd_count_c, f_markov_orders,
-    f_sent2v)
+    f_w2v_sent2v, f_glv_sent2v)
 
+print('all:')
 p_xgb_all = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=100,
+        max_depth=6,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017),
+    f_all_features,
+    predict=True)
+
+p_xgb_all_m5 = apply_model(
     xgb.XGBClassifier(
         learning_rate=0.1,
         n_estimators=100,
@@ -1719,44 +2250,37 @@ p_xgb_all = apply_model(
     f_all_features,
     predict=True)
 
-#p_lr_all = apply_model(
-#    CalibratedClassifierCV(LogisticRegression(max_iter=10), method="isotonic"),
-#    f_all_features,
-#    predict=True)
-#p_nb_all = apply_model(
-#    CalibratedClassifierCV(MultinomialNB(), method="isotonic"),
-#    f_all_nne_features,
-#    predict=True)
-#p_rf_all = apply_model(
-#    CalibratedClassifierCV(
-#        RandomForestClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
-#        method="isotonic"),
-#    f_all_features,
-#    predict=True)
-#p_et_all = apply_model(
-#    CalibratedClassifierCV(
-#        ExtraTreesClassifier(n_estimators=300, max_depth=6, n_jobs=-1),
-#        method="isotonic"),
-#    f_all_features,
-#    predict=True)
+p_xgb_all_200_m5 = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=200,
+        max_depth=5,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017),
+    f_all_features,
+    predict=True)
 
-#print('p_xgb_all_all')
-#
-#p_xgb_all_all = apply_model(
-#    xgb.XGBClassifier(
-#        learning_rate=0.1,
-#        n_estimators=100,
-#        max_depth=5,
-#        min_child_weight=1,
-#        subsample=0.8,
-#        colsample_bytree=0.5,
-#        missing=-999,
-#        nthread=-1,
-#        silent=1,
-#        objective='multi:softprob',
-#        seed=2017),
-#    f_all_features + (p_xgb_all, p_lr_all, p_nb_all, p_rf_all, p_et_all),
-#    predict=True)
+p_xgb_all_200 = apply_model(
+    xgb.XGBClassifier(
+        learning_rate=0.1,
+        n_estimators=200,
+        max_depth=6,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        missing=-999,
+        nthread=-1,
+        silent=1,
+        objective='multi:softprob',
+        seed=2017),
+    f_all_features,
+    predict=True)
 
 import os.path
 
@@ -1772,4 +2296,8 @@ def make_submission(predictions, submission_path, file_name):
             file_name, index=False)
 
 
-make_submission(p_xgb_all, '../result', "p_xgb_all-20171211-02.csv")
+make_submission(p_xgb_all, '../result', "p_xgb_all-20171214-04.csv")
+make_submission(p_xgb_all_m5, '../result', "p_xgb_all-20171214-04_m5.csv")
+make_submission(p_xgb_all_200_m5, '../result',
+                "p_xgb_all-20171214-04_200_m5.csv")
+make_submission(p_xgb_all_200, '../result', "p_xgb_all-20171214-04_200.csv")
