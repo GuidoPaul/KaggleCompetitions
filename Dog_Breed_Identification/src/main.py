@@ -8,6 +8,7 @@ import pandas as pd
 from keras.preprocessing import image
 
 
+
 def read_data(labels_path, img_path, use_top_16):
     train_df = pd.read_csv(labels_path)
 
