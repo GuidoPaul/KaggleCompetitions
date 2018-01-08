@@ -2,10 +2,19 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
 import numpy as np
 import pandas as pd
 
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss, accuracy_score
+
 from keras.preprocessing import image
+from keras.preprocessing.image import ImageDataGenerator
+from keras.applications.xception import Xception
+from keras.applications.inception_v3 import InceptionV3
+from keras.applications.xception import preprocess_input as xception_preprocessor
+from keras.applications.inception_v3 import preprocess_input as inception_v3_preprocessor
 
 
 def read_data(labels_path, img_path, use_top_16):
@@ -47,11 +56,78 @@ def show_data(train_img, train_labels):
     plt.show()
 
 
+def generate_features(train_img, train_labels):
+    batch_size = 32
+    epochs = 30
+    # num_classes = len(top_breeds)
+    num_classes = 16
+    SEED = 1234
+
+    def get_features(model_info, data, labels, datagen):
+        print("generating features...")
+        datagen.preprocessing_function = model_info["preprocessor"]
+        generator = datagen.flow(
+            data,
+            labels,
+            shuffle=False,
+            batch_size=batch_size,
+            seed=model_info["seed"])
+        bottleneck_model = model_info["model"](
+            weights='imagenet',
+            include_top=False,
+            input_shape=model_info["input_shape"],
+            pooling=model_info["pooling"])
+        return bottleneck_model.predict_generator(generator)
+
+    models = {
+        # "InceptionV3": {
+        #     "model": InceptionV3,
+        #     "preprocessor": inception_v3_preprocessor,
+        #     "input_shape": (299, 299, 3),
+        #     "seed": 1234,
+        #     "pooling": "avg"
+        # },
+        "Xception": {
+            "model": Xception,
+            "preprocessor": xception_preprocessor,
+            "input_shape": (299, 299, 3),
+            "seed": 5512,
+            "pooling": "avg"
+        }
+    }
+
+    for model_name, model in models.items():
+        print("Predicting : {}".format(model_name))
+        filename = model_name + '_features.npy'
+        if os.path.exists(filename):
+            features = np.load(filename)
+        else:
+            train_datagen = ImageDataGenerator(
+                zoom_range=0.3, width_shift_range=0.1, height_shift_range=0.1)
+            features = get_features(model, train_img, train_labels,
+                                    train_datagen)
+            np.save(filename, features)
+
+        # Now that we have created or loaded the features  we need to do some predictions.
+        start_time = time.time()
+
+        # logreg = LogisticRegression(
+        #     multi_class='multinomial', solver='lbfgs', random_state=SEED)
+        # logreg.fit(features, (y_train * range(num_classes)).sum(axis=1))
+
+        # model["predict_proba"] = logreg.predict_proba(validation_features)
+        end_time = time.time()
+        print('Training time : {} {}'.format(
+            np.round((end_time - start_time) / 60, 2), ' minutes'))
+
+
 def main():
     train_img, train_labels = read_data('../input/labels.csv',
                                         '../input/train', True)
 
     show_data(train_img, train_labels)
+
+    generate_features(train_img, train_labels)
 
 
 if __name__ == "__main__":
