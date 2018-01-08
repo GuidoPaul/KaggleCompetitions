@@ -12,6 +12,7 @@ wget -x -c --load-cookies cookies.txt -P input -nH --cut-dirs=5 https://www.kagg
 
 wget -x -c --load-cookies cookies.txt -P input -nH --cut-dirs=5 https://www.kaggle.com/c/dog-breed-identification/download/train.zip
 
+cd ./input
 unzip -a \*.zip
 rm -f labels.csv.zip sample_submission.csv.zip test.zip train.zip
 

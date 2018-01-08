@@ -1,6 +1,7 @@
 /model/*
 /input/*
 /result/*
+/cookies.txt
 *.ipynb_checkpoints
 
 command
