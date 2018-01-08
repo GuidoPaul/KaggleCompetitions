@@ -1,0 +1,8 @@
+/model/*
+/input/*
+/result/*
+*.ipynb_checkpoints
+
+command
+.floydexpt
+.floydignore
