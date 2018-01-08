@@ -17,6 +17,7 @@ from keras.applications.xception import preprocess_input as xception_preprocesso
 from keras.applications.inception_v3 import preprocess_input as inception_v3_preprocessor
 
 
+
 def read_data(labels_path, img_path, use_top_16):
     train_df = pd.read_csv(labels_path)
 
