@@ -1,0 +1,18 @@
+# HTTP Cookie File downloaded with cookies.txt by Genuinous @genuinous
+# This file can be used by wget, curl, aria2c and other standard compliant tools.
+# Usage Examples:
+#   1) wget -x --load-cookies cookies.txt "https://www.kaggle.com/williamxie"
+#   2) curl --cookie cookies.txt "https://www.kaggle.com/williamxie"
+#   3) aria2c --load-cookies cookies.txt "https://www.kaggle.com/williamxie"
+#
+www.kaggle.com	FALSE	/	TRUE	1544765780	ai_user	V6DUT|2017-12-14T05:36:20.070Z
+.kaggle.com	TRUE	/	FALSE	2144329797	intercom-id-koj6gxx6	73dd72d5-c7d3-4718-b635-45e2deecae30
+.kaggle.com	TRUE	/	FALSE	1546930785	intercom-lou-koj6gxx6	1
+.kaggle.com	TRUE	/	FALSE	1578461821	_ga	GA1.2.534198416.1515389821
+.kaggle.com	TRUE	/	FALSE	1515476221	_gid	GA1.2.2085026219.1515389821
+www.kaggle.com	FALSE	/	TRUE	0	__RequestVerificationToken	6P1wW_EpfcexwTBN12x1yUeDqKuEKv4yHAtydhKONNrgSRth6yo1d5v9QV9DNsZpX-2lgT7H1w9ZILbZZApwnL3kWME1
+.www.kaggle.com	TRUE	/	FALSE	0	ARRAffinity	f5d8703ff684b3b512f77407867d7c4cb3cab3bf28c2ea9357e650cd58b3e7dd
+.kaggle.com	TRUE	/	TRUE	1578462622	.ASPXAUTH	375139E5615F275E63E65E089E0FDBC68711A103E0C3D527F0FF34FB568639E42097F3BF6831B4558C01CB44FC31E98999CF8387747623A29392438C06D89C5BCA73AA51BFA3D9513BC784884D31DFC1229FA197
+www.kaggle.com	FALSE	/	TRUE	0	TempData	.aovjpeXD/mffhhohXjDUQeNLh6frsptJZ2IkcXPw7ApRBF9gi9WwuiAzv5SbCRjUEtBhv0K7yn8U3P3n8yisxupHTO0=
+www.kaggle.com	FALSE	/	TRUE	1515392584	ai_session	rI15a|1515389447769|1515390784701.795
+.kaggle.com	TRUE	/	FALSE	1515995585	intercom-session-koj6gxx6	NjkvSjZrTWVzR2xqK3VEL1V4ci9KS0lFZ1l1N1BYeWZzQXkzNUVBSEZNRGhvWS9XNk9WSnRyRDVFMGJQY3ZIRC0tQjg0bzFDcWxSL3lNMmJBMVFZclZOUT09--11585a98d62eb9762ab4d22b6463e33cadded5b9
