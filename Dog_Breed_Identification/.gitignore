@@ -1,5 +1,5 @@
 /model/*
-/model/cookies.txt
+/input/cookies.txt
 /result/*
 *.ipynb_checkpoints
 
