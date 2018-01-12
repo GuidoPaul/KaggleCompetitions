@@ -1,6 +1,8 @@
-/model/*
+/data_gen/*
 /input/*
+/model/*
 /result/*
+
 /cookies.txt
 *.ipynb_checkpoints
 
