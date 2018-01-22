@@ -3,162 +3,381 @@
 
 import os
 import time
+import shutil
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from PIL import Image
 
-# from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss, accuracy_score
-# from sklearn.model_selection import train_test_split
+import pretrainedmodels
 
-# from keras.utils import to_categorical
-from keras.preprocessing import image
-from keras.preprocessing.image import ImageDataGenerator
-from keras.applications.xception import Xception
-from keras.applications.inception_v3 import InceptionV3
-from keras.applications.xception import preprocess_input as xception_preprocessor
-from keras.applications.inception_v3 import preprocess_input as inception_v3_preprocessor
+import torch
+import torch.backends.cudnn as cudnn
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.utils.data as data
+from torch.autograd import Variable
+from torch.optim import lr_scheduler
 
-from keras.layers import Input
-from keras.layers.core import Dense, Dropout
-from keras.models import Model, load_model, Sequential
-from keras.callbacks import EarlyStopping, ModelCheckpoint
+# import torchvision.datasets as datasets
+# import torchvision.models as models
+import torchvision.transforms as transforms
 
-
-def read_data(img_path, labels_path, img_size, use_top_16, usage="Training"):
-    assert usage in ("Training", "Testing")
-
-    data_df = pd.read_csv(labels_path)
-    data_df["image_path"] = data_df.apply(
-        lambda x: os.path.join(img_path, x["id"] + ".jpg"), axis=1)
-
-    # using top 16 classes
-    if usage is "Training" and use_top_16:
-        top_breeds = sorted(
-            list(data_df["breed"].value_counts().head(16).index))
-        data_df = data_df[data_df["breed"].isin(top_breeds)]
-
-    data_img = np.array([
-        image.img_to_array(
-            image.load_img(img, target_size=(img_size, img_size)))
-        for img in data_df["image_path"].values.tolist()
-    ]).astype("float32")
-
-    if usage is 'Training':
-        print(data_df.info())
-        print(data_df.head())
-        print("Number of breeds of dogs: ", len(set(data_df["breed"])))
-
-        # one hot labels
-        data_labels = np.asarray(pd.get_dummies(data_df["breed"], sparse=True))
-
-        return data_img, data_labels
-    else:
-        return data_img
+# import torchvision.utils as utils
 
 
-def show_data(train_img, train_labels):
-    import matplotlib.pyplot as plt
+class DogsDataset(data.Dataset):
+    """Dog breed identification dataset."""
 
-    for i in range(1, 5):
-        plt.subplot(2, 2, i)
-        rint = np.random.randint(0, len(train_img))
-        plt.title(train_labels[rint])
-        plt.axis('off')
-        plt.imshow(train_img[rint].astype(np.uint8))
+    def __init__(self, img_dir, dataframe, transform=None):
+        """
+        Args:
+            img_dir (string): Directory with all the images.
+            dataframe (pandas.core.frame.DataFrame): Pandas dataframe obtained
+                by read_csv().
+            transform (callable, optional): Optional transform to be applied
+                on a sample.
+        """
+        self.labels_frame = dataframe
+        self.img_dir = img_dir
+        self.transform = transform
 
-    plt.show()
+    def __len__(self):
+        return len(self.labels_frame)
+
+    def __getitem__(self, idx):
+        img_name = os.path.join(self.img_dir,
+                                self.labels_frame.id[idx]) + ".jpg"
+
+        image = Image.open(img_name)
+        label = self.labels_frame.target[idx]
+
+        if self.transform:
+            image = self.transform(image)
+
+        return [image, label]
 
 
-models = {
-    "InceptionV3": {
-        "model": InceptionV3,
-        "preprocessor": inception_v3_preprocessor,
-        "input_shape": (299, 299, 3),
-        "pooling": "avg"
-    },
-    "Xception": {
-        "model": Xception,
-        "preprocessor": xception_preprocessor,
-        "input_shape": (299, 299, 3),
-        "pooling": "avg"
+# Let's visualize a few training images so as to understand the data augmentations.
+def imshow(inp, title=None):
+    """Imshow for Tensor."""
+    inp = inp.numpy().transpose((1, 2, 0))
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    inp = std * inp + mean
+    inp = np.clip(inp, 0, 1)
+    plt.imshow(inp)
+    if title is not None:
+        plt.title(title)
+    plt.pause(0.001)  # pause a bit so that plots are updated
+
+
+def data_loader(all_data_dir, all_labels_df, img_size, batch_size):
+    data_transforms = {
+        'train':
+        transforms.Compose([
+            transforms.Resize(int(img_size / 224 * 256)),
+            transforms.CenterCrop(img_size),
+            # transforms.RandomResizedCrop(img_size),
+            # transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+        'valid':
+        transforms.Compose([
+            # Higher scale-up for inception
+            transforms.Resize(int(img_size / 224 * 256)),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+        'test':
+        transforms.Compose([
+            transforms.Resize(int(img_size / 224 * 256)),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
     }
-}
+    # image_datasets = {
+    #     phase: datasets.ImageFolder(
+    #         os.path.join(data_dir, phase), data_transforms[phase])
+    #     for phase in ['train', 'valid', 'test']
+    # }
+    image_datasets = {
+        phase: DogsDataset(all_data_dir[phase], all_labels_df[phase],
+                           data_transforms[phase])
+        for phase in ['train', 'valid', 'test']
+    }
+    dataloaders = {
+        phase: data.DataLoader(
+            image_datasets[phase],
+            batch_size=batch_size,
+            shuffle=False,  # if True, different models have different labels
+            num_workers=4)
+        for phase in ['train', 'valid', 'test']
+    }
 
-batch_size = 32
-epochs = 30
-num_classes = 120
-SEED = 2018
-model_path = '/tmp/nn_model.h5'
+    print(
+        len(dataloaders['train'].dataset),
+        len(dataloaders['valid'].dataset), len(dataloaders['test'].dataset))
+
+    # # # Get a batch of training data
+    # inputs, classes = next(iter(dataloaders['train']))
+
+    # # # Make a grid from batch
+    # out = utils.make_grid(inputs, nrow=16)
+    # imshow(out)
+    # plt.show()
+
+    return dataloaders
 
 
-def generate_features(data_img, usage):
-    assert usage in ("Training", "Testing")
+def save_features_targets(model_name, data_iter):
+    # load pretrained model
+    if model_name is "nasnetalarge":
+        model = pretrainedmodels.__dict__[model_name](
+            num_classes=1000, pretrained='imagenet')
+    else:
+        model = pretrainedmodels.__dict__[model_name](pretrained='imagenet')
+    model.eval()
 
-    def get_bottleneck_features(model_info, data, datagen):
-        print("generating features...")
-        datagen.preprocessing_function = model_info["preprocessor"]
-        generator = datagen.flow(
-            data, shuffle=False, batch_size=batch_size, seed=SEED)
-        bottleneck_model = model_info["model"](
-            weights='imagenet',
-            include_top=False,
-            input_shape=model_info["input_shape"],
-            pooling=model_info["pooling"])
-        return bottleneck_model.predict_generator(
-            generator, steps=(len(data) // batch_size) + 1)
+    # pretrainedmodels.inceptionresnetv2()
 
-    for model_name, model in models.items():
-        print("Generater model feature: {}".format(model_name))
-        if usage is "Training":
-            filename = model_name + "_features.npy"
-        else:
-            filename = model_name + "_features_test.npy"
-        filepath = os.path.join("../model", filename)
-        if os.path.exists(filepath):
+    if use_gpu:
+        model.cuda()
+
+    # Don't update non-classifier learned features in the pretrained networks
+    for param in model.parameters():
+        param.requires_grad = False
+
+    for phase in ['train', 'valid', 'test']:
+        features_model_path = "model/features_%s_%s.npy" % (model_name, phase)
+        ytargets_model_path = "model/ytargets_%s.npy" % (phase)
+        if os.path.exists(features_model_path):
             continue
+
+        features = []
+        ytargets = []
+        for inputs, labels in data_iter[phase]:
+            # wrap them in Variable
+            if use_gpu:
+                inputs = Variable(inputs.cuda(), requires_grad=False)
+                labels = Variable(labels.cuda())
+            else:
+                inputs, labels = Variable(
+                    inputs, requires_grad=False), Variable(labels)
+
+            if model_name.startswith('alexnet'):
+                x = model.features(inputs)
+            elif model_name.startswith('vgg'):
+                x = model.make_features(inputs)
+            elif model_name.startswith('densenet') or model_name.startswith(
+                    'nasnetalarge'):
+                x = model.features(inputs)
+                x = F.relu(x, inplace=True)
+                x = F.avg_pool2d(x, kernel_size=x.size(-1), stride=1)
+            else:
+                # 'bninception', 'fbresnet152', 'inception', 'resnet'
+                # 'resnext101_64x4d', 'inceptionresnetv2'
+                x = model.features(inputs)
+                # avgpool is important
+                x = F.avg_pool2d(x, kernel_size=x.size(-1), stride=1)
+
+                # inception stride=kernel_size
+                # x = F.avg_pool2d(x, kernel_size=x.size(-1), stride=1)
+            x = x.view(x.size(0), -1)
+            features.append(x.data.cpu().numpy())
+            ytargets.append(labels.data.cpu().numpy())
+        features = np.concatenate(features, axis=0)
+        ytargets = np.concatenate(ytargets, axis=0)
+        print(features.shape, ytargets.shape)
+
+        np.save(features_model_path, features)
+        if os.path.exists(ytargets_model_path):
+            continue
+        np.save(ytargets_model_path, ytargets)
+
+
+def load_data(model_names):
+    data_iter = {}
+    for phase in ['train', 'valid', 'test']:
+        if type(model_names) is list:
+            features = [
+                np.load("model/features_%s_%s.npy" % (model_name, phase))
+                for model_name in model_names
+            ]
+            features = np.concatenate(features, axis=1)
         else:
-            datagen = ImageDataGenerator(
-                zoom_range=0.3, width_shift_range=0.1, height_shift_range=0.1)
-            features = get_bottleneck_features(model, data_img, datagen)
-            np.save(filepath, features)
+            features = np.load("model/features_%s_%s.npy" % (model_names,
+                                                             phase))
+        ytargets = np.load("model/ytargets_%s.npy" % (phase))
 
-        print(features.shape)
+        input_dim = features.shape[1]
+
+        features = torch.from_numpy(features)
+        ytargets = torch.from_numpy(ytargets)
+        tensor_dataset = torch.utils.data.TensorDataset(features, ytargets)
+        data_iter[phase] = torch.utils.data.DataLoader(
+            tensor_dataset, batch_size=batch_size, shuffle=False)
+
+    return input_dim, data_iter
 
 
-def build_model():
-    # inputs = Input(features.shape[1:])
-    # x = inputs
-    # x = Dropout(0.5)(x)
-    # x = Dense(256, activation='softmax')(x)
-    # x = Dropout(0.5)(x)
-    # x = Dense(120, activation='softmax')(x)
-    # model = Model(inputs, x)
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    save_filepath = os.path.join("model", "save_" + filename)
+    best_filepath = os.path.join("model", "best_" + filename)
+    torch.save(state, save_filepath)
+    if is_best:
+        shutil.copyfile(save_filepath, best_filepath)
 
-    inputs = Input((4096, ))
-    x = inputs
-    x = Dropout(0.5)(x)
-    x = Dense(120, activation='softmax')(x)
-    model = Model(inputs, x)
 
-    # model = Sequential()
-    # model.add(Dense(256, input_dim=4096))
-    # # model.add(Dense(120, input_shape=(4096,)))
-    # model.add(Dropout(0.5))
-    # model.add(Dense(120))
+def evaluate(model, data_iter_valid, criterion):
+    # switch to evaluate mode
+    model.train(False)
 
-    # model = Sequential()
-    # model.add(Dense(256, input_shape=(4096, ), activation='relu'))
-    # model.add(Dropout(0.5))
-    # model.add(Dense(120))
+    running_loss = 0
+    running_corrects = 0
+    total = 0
 
-    model.compile(
-        loss='categorical_crossentropy',
-        optimizer='adam',
-        metrics=['accuracy'])
+    # Iterate over data
+    for (inputs, labels) in data_iter_valid:
+        # wrap them in Variable
+        if use_gpu:
+            inputs = Variable(inputs.cuda())
+            labels = Variable(labels.cuda())
+        else:
+            inputs, labels = Variable(inputs), Variable(labels)
 
-    model.summary()
+        # forward
+        outputs = model(inputs)
+        _, preds = torch.max(outputs.data, 1)
+        loss = criterion(outputs, labels)
 
-    return model
+        # statistics
+        total += labels.size(0)
+        running_loss += loss.data[0]
+        running_corrects += torch.sum(preds == labels.data)
+
+    epoch_loss = running_loss / total
+    epoch_acc = running_corrects / total
+
+    return epoch_loss, epoch_acc
+
+
+def train_model(model_names, input_dim, data_iter, resume=False):
+    since = time.time()
+
+    # build model
+    # model = nn.Sequential(
+    #     # nn.BatchNorm2d(input_dim),
+    #     # nn.ReLU(),
+    #     nn.Linear(input_dim, 512),
+    #     nn.BatchNorm2d(512),
+    #     nn.ReLU(),
+    #     nn.Dropout(0.5),
+    #     nn.Linear(512, 120), )
+    model = nn.Sequential(
+        nn.Linear(input_dim, 512),
+        nn.ReLU(),
+        nn.Dropout(0.5),
+        nn.Linear(512, 120), )
+
+    global start_epoch
+
+    if resume:
+        # optionally resume from a checkpoint
+        if os.path.isfile(resume):
+            print("=> Loading checkpoint '{}'".format(resume))
+            checkpoint = torch.load(resume)
+            start_epoch = checkpoint['epoch']
+            # best_acc = checkpoint['best_acc']
+            model.load_state_dict(checkpoint['state_dict'])
+            print("=> Loaded checkpoint (epoch {})".format(start_epoch))
+        else:
+            print("=> No checkpoint found at '{}'".format(resume))
+
+    # define loss function (criterion) and pptimizer
+    criterion = nn.CrossEntropyLoss()
+
+    if use_gpu:
+        model = model.cuda()
+        criterion = criterion.cuda()
+
+    # Observe that only parameters of final layer are being optimized as
+    # opoosed to before.
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    # Decay LR by a factor of 0.1 every 30 epochs
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=550, gamma=0.9)
+
+    best_model_wts = model.state_dict()
+    best_acc = 0.0
+
+    for epoch in range(start_epoch, num_epochs):
+        exp_lr_scheduler.step()
+        # switch to train mode
+        model.train(True)
+
+        running_loss = 0
+        running_corrects = 0
+        total = 0
+
+        for (inputs, labels) in data_iter['train']:
+            # wrap them in Variable
+            if use_gpu:
+                inputs = Variable(inputs.cuda())
+                labels = Variable(labels.cuda())
+            else:
+                inputs, labels = Variable(inputs), Variable(labels)
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            # forward + backward + optimize
+            outputs = model(inputs)
+            _, preds = torch.max(outputs.data, 1)
+
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            # statistics
+            total += labels.size(0)
+            running_loss += loss.data[0]
+            running_corrects += torch.sum(preds == labels.data)
+
+        train_epoch_loss = running_loss / total
+        train_epoch_acc = running_corrects / total
+
+        valid_epoch_loss, valid_epoch_acc = evaluate(model, data_iter['valid'],
+                                                     criterion)
+        print(
+            "Epoch: {:2d}/{:2d} | Train Loss: {:.4f}, Acc: {:.4f} | Valid Loss: {:.4f}, Acc: {:.4f}".
+            format(epoch, num_epochs - 1, train_epoch_loss, train_epoch_acc,
+                   valid_epoch_loss, valid_epoch_acc))
+
+        if (epoch + 1) % save_period == 0:
+            save_checkpoint({
+                "epoch": epoch + 1,
+                "state_dict": model.state_dict(),
+                "best_acc": best_acc,
+            }, valid_epoch_acc > best_acc, "ckp_{}.pth.tar".format(epoch + 1))
+
+        # deep copy the model
+        if valid_epoch_acc > best_acc:
+            best_acc = valid_epoch_acc
+            best_model_wts = model.state_dict()
+
+    time_elapsed = time.time() - since
+    print("Training complete in {:.0f}m {:.0f}s".format(
+        time_elapsed // 60, time_elapsed % 60))
+    print("Best valid Accuracy: {:4f}".format(best_acc))
+
+    # # load best model weights
+    model.load_state_dict(best_model_wts)
+    return model, best_acc
 
 
 def make_submission(predictions, labels_path, submission_dir, file_name):
@@ -171,90 +390,163 @@ def make_submission(predictions, labels_path, submission_dir, file_name):
     df_pred.to_csv(file_path, index=None)
 
 
-def run_train(train_labels):
-    features = np.hstack([
-        np.load(os.path.join('../model', model_name + '_features.npy'))
-        for model_name, model in models.items()
-    ])
-    features_test = np.hstack([
-        np.load(os.path.join('../model', model_name + '_features_test.npy'))
-        for model_name, model in models.items()
-    ])
-    """
-    X_train, X_valid, y_train, y_valid = train_test_split(
-        features, train_labels, test_size=0.3, random_state=SEED)
-    """
-    print(features.shape)
-    print(features.shape[1:])
-    print(type(features.shape[1:]))
+def test(model, model_names, data_iter):
+    # switch to evaluate mode
+    model.train(False)
 
-    start_time = time.time()
+    sub_outputs = []
 
-    model = build_model()
+    # Iterate over data
+    for inputs, filepath in data_iter['test']:
+        # wrap them in Variable
+        if use_gpu:
+            inputs = Variable(inputs.cuda())
+        else:
+            inputs = Variable(inputs)
 
-    earlyStopping = EarlyStopping(
-        monitor='val_loss', patience=5, verbose=0, mode='auto')
-    model_chk = ModelCheckpoint(
-        filepath=model_path,
-        monitor='val_loss',
-        save_best_only=True,
-        verbose=1)
+        outputs = model(inputs)
 
-    model.fit(
-        features,
-        train_labels,
-        batch_size=32,
-        epochs=20,
-        validation_split=0.3,
-        callbacks=[earlyStopping, model_chk],
-        verbose=1)
-    model = load_model(model_path)
-    predictions = model.predict(features_test, verbose=1)
-    make_submission(predictions, '../input/sample_submission.csv', '../result',
-                    'pred-20180112-02.csv')
-    end_time = time.time()
-    print('Training time : {} {}'.format(
-        np.round((end_time - start_time) / 60, 2), ' minutes'))
+        # softmax
+        outputs = F.softmax(outputs, dim=1)
+
+        sub_outputs.append(outputs.data.cpu().numpy())
+
+        # prob = np.around(prob, decimals=4)
+        # prob = np.clip(prob, clip, 1 - clip)
+        # csv_map[filepath] += (prob / nb_aug)
+
+    sub_outputs = np.concatenate(sub_outputs)
+    # sub_outputs = np.clip(sub_outputs, clip, 1 - clip)
+
+    make_submission(sub_outputs, 'input/sample_submission.csv', 'result',
+                    'pred-20180122-03.csv')
 
 
-def lr():
-    # logreg = LogisticRegression(
-    #     multi_class='multinomial', solver='lbfgs', random_state=SEED)
-    # logreg.fit(X_train, (y_train * range(num_classes)).sum(axis=1))
+# data
+labels_path = "input/labels.csv"
+sample_path = "input/sample_submission.csv"
+stanford_lables_path = "input/stanford_lables.csv"
+data_dir = "input"
+model_dir = "model"
+batch_size = 128
 
-    # predict_probs = logreg.predict_proba(X_valid)
+# model
+lr = 1e-4
+start_epoch = 0
+num_epochs = 500
+save_period = 10
+all_model_names = [
+    "alexnet",
+    "bninception",
+    "densenet169",
+    "densenet201",
+    "fbresnet152",
+    "inceptionv3",
+    "inceptionv4",
+    "nasnetalarge",
+    "resnet18",
+    "resnet101",
+    "resnet152",
+    "resnext101_64x4d",
+    "vgg16",
+    "vgg19",
+    "vgg19_bn",
+]
+# all_model_names = ["vgg16_bn", "inceptionresnetv2"]
+# all_model_names = ["inceptionresnetv2"]
+# all_model_names = ["resnext101_32x4d"]
+all_model_names = ["vgg16"]
+select_model_names = ["inceptionv3", "inceptionv4", "densenet201"]
+select_model_names = [
+    "inceptionv3", "vgg19_bn", "resnext101_64x4d", "inceptionv4"
+]
+# clip = 0.0005
 
-    # print('ensemble of features va logLoss : {}'.format(
-    #     log_loss(y_valid, predict_probs)))
+use_gpu = torch.cuda.is_available()
+if use_gpu:
+    print("use_gpu")
 
-    # output = logreg.predict_proba(features_test)
-    pass
+print(pretrainedmodels.model_names)
 
 
-def main():
-    train_img, train_labels = read_data(
-        img_path="../input/train",
-        labels_path="../input/labels.csv",
-        img_size=299,
-        use_top_16=True,
-        usage="Training")
+def main(resume=False):
+    # load labels
+    labels_df = pd.read_csv(labels_path)
+    sample_df = pd.read_csv(sample_path)
+    stanford_lables_df = pd.read_csv(stanford_lables_path)
 
-    test_img = read_data(
-        img_path="../input/test",
-        labels_path="../input/sample_submission.csv",
-        img_size=299,
-        use_top_16=False,
-        usage="Testing")
+    labelnames = sample_df.keys()[1:]
+    codes = range(len(labelnames))
+    breed_to_code = dict(zip(labelnames, codes))
 
-    # show_data(train_img, train_labels)
+    labels_df['target'] = [breed_to_code[x] for x in labels_df.breed]
+    stanford_lables_df['target'] = [
+        breed_to_code[x] for x in stanford_lables_df.breed
+    ]
+    sample_df['target'] = [0] * len(sample_df)
 
-    generate_features(train_img, usage="Training")
-    generate_features(test_img, usage="Testing")
+    # standard
+    # cut = int(len(labels_df) * 0.7)
+    # train_df, valid_df = np.split(labels_df, [cut], axis=0)
+    # valid_df = valid_df.reset_index(drop=True)
 
-    # data_df = pd.read_csv("../input/labels.csv")
-    # train_labels = np.asarray(pd.get_dummies(data_df["breed"], sparse=True))
-    run_train(train_labels)
+    # all_labels_df = {'train': train_df, 'valid': valid_df, 'test': sample_df}
+    # all_data_dir = {
+    #     'train': os.path.join(data_dir, 'train'),
+    #     'valid': os.path.join(data_dir, 'train'),
+    #     'test': os.path.join(data_dir, 'test'),
+    # }
+
+    # stanford
+    all_labels_df = {
+        'train': stanford_lables_df,
+        'valid': stanford_lables_df,
+        'test': sample_df
+    }
+    all_data_dir = {
+        'train': os.path.join(data_dir, 'Images'),
+        'valid': os.path.join(data_dir, 'Images'),
+        'test': os.path.join(data_dir, 'test'),
+    }
+
+    # Data augmentation and normalization for training
+    data_iter_224 = data_loader(
+        all_data_dir, all_labels_df, img_size=224, batch_size=batch_size)
+    data_iter_299 = data_loader(
+        all_data_dir, all_labels_df, img_size=299, batch_size=batch_size)
+
+    # This flag allows you to enable the inbuilt cudnn auto-tuner to find
+    # the best algorithm to use for your hardware.
+    if use_gpu:
+        cudnn.benchmark = True
+
+    for model_name in all_model_names:
+        print('Load pretrained {} model on Imagenet'.format(model_name))
+        if model_name.startswith('inception'):
+            save_features_targets(model_name, data_iter_299)
+        else:
+            save_features_targets(model_name, data_iter_224)
+
+    # # single feature
+    # best_accs = []
+    # for model_name in all_model_names:
+    #     print("Train {} models".format(model_name))
+    #     input_dim, data_iter = load_data(model_name)
+    #     model, best_acc = train_model(model_name, input_dim, data_iter)
+    #     best_accs.append((model_name, best_acc))
+    # df = pd.DataFrame(best_accs, columns=['model', 'best_acc'])
+    # df = df.sort_values(by='best_acc', ascending=False)
+    # print(df)
+
+    # select feature
+    input_dim, data_iter = load_data(select_model_names)
+    print("Train {} models".format(select_model_names))
+    model, best_acc = train_model(
+        select_model_names, input_dim, data_iter, resume=resume)
+    print("Test {} models".format(select_model_names))
+    test(model, select_model_names, data_iter)
 
 
 if __name__ == "__main__":
+    # main(resume="model/best_ckp_300.pth.tar")
     main()
