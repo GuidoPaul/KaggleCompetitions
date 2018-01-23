@@ -260,29 +260,63 @@ def evaluate(model, data_iter_valid, criterion):
         running_loss += loss.data[0]
         running_corrects += torch.sum(preds == labels.data)
 
-    epoch_loss = running_loss / total
-    epoch_acc = running_corrects / total
+    valid_epoch_loss = running_loss / total
+    valid_epoch_acc = running_corrects / total
 
-    return epoch_loss, epoch_acc
+    print("Valid Loss: {:.4f}, Acc: {:.4f}\n".format(valid_epoch_loss,
+                                                     valid_epoch_acc))
+
+    return valid_epoch_acc
+
+
+def train(model, data_iter_train, optimizer, criterion):
+    # switch to train mode
+    model.train(True)
+
+    running_loss = 0
+    running_corrects = 0
+    total = 0
+
+    for (inputs, labels) in data_iter_train:
+        # wrap them in Variable
+        if use_gpu:
+            inputs = Variable(inputs.cuda())
+            labels = Variable(labels.cuda())
+        else:
+            inputs, labels = Variable(inputs), Variable(labels)
+
+        # zero the parameter gradients
+        optimizer.zero_grad()
+
+        # forward + backward + optimize
+        outputs = model(inputs)
+        _, preds = torch.max(outputs.data, 1)
+
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        # statistics
+        total += labels.size(0)
+        running_loss += loss.data[0]
+        running_corrects += torch.sum(preds == labels.data)
+
+    train_epoch_loss = running_loss / total
+    train_epoch_acc = running_corrects / total
+
+    print("Train Loss: {:.4f}, Acc: {:.4f}".format(train_epoch_loss,
+                                                   train_epoch_acc))
 
 
 def train_model(model_names, input_dim, data_iter, resume=False):
     since = time.time()
 
     # build model
-    # model = nn.Sequential(
-    #     # nn.BatchNorm2d(input_dim),
-    #     # nn.ReLU(),
-    #     nn.Linear(input_dim, 512),
-    #     nn.BatchNorm2d(512),
-    #     nn.ReLU(),
-    #     nn.Dropout(0.5),
-    #     nn.Linear(512, 120), )
     model = nn.Sequential(
-        nn.Linear(input_dim, 512),
+        nn.Linear(input_dim, 1024),
         nn.ReLU(),
         nn.Dropout(0.5),
-        nn.Linear(512, 120), )
+        nn.Linear(1024, 120), )
 
     global start_epoch
 
@@ -310,53 +344,19 @@ def train_model(model_names, input_dim, data_iter, resume=False):
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     # Decay LR by a factor of 0.1 every 30 epochs
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=550, gamma=0.9)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=950, gamma=0.9)
 
     best_model_wts = model.state_dict()
     best_acc = 0.0
 
     for epoch in range(start_epoch, num_epochs):
+        print("Epoch: {:2d}/{:2d}".format(epoch, num_epochs - 1))
+
         exp_lr_scheduler.step()
-        # switch to train mode
-        model.train(True)
 
-        running_loss = 0
-        running_corrects = 0
-        total = 0
+        train(model, data_iter['train'], optimizer, criterion)
 
-        for (inputs, labels) in data_iter['train']:
-            # wrap them in Variable
-            if use_gpu:
-                inputs = Variable(inputs.cuda())
-                labels = Variable(labels.cuda())
-            else:
-                inputs, labels = Variable(inputs), Variable(labels)
-
-            # zero the parameter gradients
-            optimizer.zero_grad()
-
-            # forward + backward + optimize
-            outputs = model(inputs)
-            _, preds = torch.max(outputs.data, 1)
-
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            # statistics
-            total += labels.size(0)
-            running_loss += loss.data[0]
-            running_corrects += torch.sum(preds == labels.data)
-
-        train_epoch_loss = running_loss / total
-        train_epoch_acc = running_corrects / total
-
-        valid_epoch_loss, valid_epoch_acc = evaluate(model, data_iter['valid'],
-                                                     criterion)
-        print(
-            "Epoch: {:2d}/{:2d} | Train Loss: {:.4f}, Acc: {:.4f} | Valid Loss: {:.4f}, Acc: {:.4f}".
-            format(epoch, num_epochs - 1, train_epoch_loss, train_epoch_acc,
-                   valid_epoch_loss, valid_epoch_acc))
+        valid_epoch_acc = evaluate(model, data_iter['valid'], criterion)
 
         if (epoch + 1) % save_period == 0:
             save_checkpoint({
@@ -419,7 +419,7 @@ def test(model, model_names, data_iter):
     # sub_outputs = np.clip(sub_outputs, clip, 1 - clip)
 
     make_submission(sub_outputs, 'input/sample_submission.csv', 'result',
-                    'pred-20180122-03.csv')
+                    'pred-20180123-03.csv')
 
 
 # data
@@ -433,7 +433,7 @@ batch_size = 128
 # model
 lr = 1e-4
 start_epoch = 0
-num_epochs = 500
+num_epochs = 700
 save_period = 10
 all_model_names = [
     "alexnet",
@@ -443,6 +443,7 @@ all_model_names = [
     "fbresnet152",
     "inceptionv3",
     "inceptionv4",
+    "inceptionresnetv2",
     "nasnetalarge",
     "resnet18",
     "resnet101",
@@ -450,15 +451,14 @@ all_model_names = [
     "resnext101_64x4d",
     "vgg16",
     "vgg19",
+    "vgg16_bn",
     "vgg19_bn",
 ]
-# all_model_names = ["vgg16_bn", "inceptionresnetv2"]
-# all_model_names = ["inceptionresnetv2"]
-# all_model_names = ["resnext101_32x4d"]
-all_model_names = ["vgg16"]
-select_model_names = ["inceptionv3", "inceptionv4", "densenet201"]
 select_model_names = [
-    "inceptionv3", "vgg19_bn", "resnext101_64x4d", "inceptionv4"
+    "inceptionv3",
+    "vgg19_bn",
+    "resnext101_64x4d",
+    "resnext101_32x4d",
 ]
 # clip = 0.0005
 
@@ -548,5 +548,5 @@ def main(resume=False):
 
 
 if __name__ == "__main__":
-    # main(resume="model/best_ckp_300.pth.tar")
-    main()
+    main(resume="model/best_ckp_470.pth.tar")
+    # main()
