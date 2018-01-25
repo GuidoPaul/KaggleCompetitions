@@ -77,34 +77,32 @@ def data_loader(all_data_dir, all_labels_df, img_size, batch_size):
     data_transforms = {
         'train':
         transforms.Compose([
-            transforms.Resize(int(img_size / 224 * 256)),
+            transforms.Resize(img_size),
+            # transforms.Resize(int(img_size / 224 * 256)),
             transforms.CenterCrop(img_size),
-            # transforms.RandomResizedCrop(img_size),
-            # transforms.RandomHorizontalFlip(),
+            # # transforms.RandomResizedCrop(img_size),
+            # # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]),
         'valid':
         transforms.Compose([
             # Higher scale-up for inception
-            transforms.Resize(int(img_size / 224 * 256)),
+            transforms.Resize(img_size),
+            # transforms.Resize(int(img_size / 224 * 256)),
             transforms.CenterCrop(img_size),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]),
         'test':
         transforms.Compose([
-            transforms.Resize(int(img_size / 224 * 256)),
+            transforms.Resize(img_size),
+            # transforms.Resize(int(img_size / 224 * 256)),
             transforms.CenterCrop(img_size),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]),
     }
-    # image_datasets = {
-    #     phase: datasets.ImageFolder(
-    #         os.path.join(data_dir, phase), data_transforms[phase])
-    #     for phase in ['train', 'valid', 'test']
-    # }
     image_datasets = {
         phase: DogsDataset(all_data_dir[phase], all_labels_df[phase],
                            data_transforms[phase])
@@ -395,6 +393,7 @@ def test(model, model_names, data_iter):
     model.train(False)
 
     sub_outputs = []
+    sub_outputs2 = []
 
     # Iterate over data
     for inputs, filepath in data_iter['test']:
@@ -409,17 +408,29 @@ def test(model, model_names, data_iter):
         # softmax
         outputs = F.softmax(outputs, dim=1)
 
-        sub_outputs.append(outputs.data.cpu().numpy())
+        outputs = outputs.data.cpu().numpy()
 
-        # prob = np.around(prob, decimals=4)
-        # prob = np.clip(prob, clip, 1 - clip)
-        # csv_map[filepath] += (prob / nb_aug)
+        outputs2 = np.zeros_like(outputs)
+        idxs = outputs.argmax(axis=1)
+        for i, idx in enumerate(idxs):
+            if (outputs[i][idx] >= 0.9):
+                outputs2[i][idx] = 1.0
+            else:
+                outputs2[i] = outputs[i]
+
+        # sub_outputs.append(outputs.data.cpu().numpy())
+        sub_outputs.append(outputs)
+        sub_outputs2.append(outputs2)
 
     sub_outputs = np.concatenate(sub_outputs)
-    # sub_outputs = np.clip(sub_outputs, clip, 1 - clip)
+    sub_outputs2 = np.concatenate(sub_outputs2)
+    # sub_outputs2 = np.around(sub_outputs2, decimals=4)
+    # sub_outputs2 = np.clip(sub_outputs2, clip, 1 - clip)
 
     make_submission(sub_outputs, 'input/sample_submission.csv', 'result',
-                    'pred-20180123-03.csv')
+                    'pred-20180125-04.csv')
+    make_submission(sub_outputs2, 'input/sample_submission.csv', 'result',
+                    'pred-20180125-04-2.csv')
 
 
 # data
@@ -433,7 +444,7 @@ batch_size = 128
 # model
 lr = 1e-4
 start_epoch = 0
-num_epochs = 700
+num_epochs = 500
 save_period = 10
 all_model_names = [
     "alexnet",
@@ -459,6 +470,14 @@ select_model_names = [
     "vgg19_bn",
     "resnext101_64x4d",
     "resnext101_32x4d",
+]
+select_model_names = [
+    "vgg19_bn",
+    # "vgg16_bn",
+    "resnext101_64x4d",
+    # "resnext101_32x4d",
+    "inceptionv3",
+    "densenet201",
 ]
 # clip = 0.0005
 
@@ -548,5 +567,5 @@ def main(resume=False):
 
 
 if __name__ == "__main__":
-    main(resume="model/best_ckp_470.pth.tar")
-    # main()
+    # main(resume="model/best_ckp_470.pth.tar")
+    main()

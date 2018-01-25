@@ -1,4 +1,11 @@
-          model     best_acc
+transforms.Compose([
+    transforms.Resize(int(img_size / 224 * 256)),
+    transforms.CenterCrop(img_size),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+])
+
+   model             best_acc
 3  inceptionv3       0.970991
 10 vgg19_bn          0.970117
 -  resnext101_64x4d  0.969728
@@ -17,3 +24,25 @@
 8  vgg16             0.872498
 1  bninception       0.181876
 0  alexnet           0.036297
+
+
+transforms.Compose([
+    transforms.Resize(img_size),
+    transforms.CenterCrop(img_size),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+])
+
+               model  best_acc
+1           vgg19_bn  0.985180
+4           vgg16_bn  0.983528
+2   resnext101_64x4d  0.977600
+3   resnext101_32x4d  0.977308
+0        inceptionv3  0.976385
+6        densenet201  0.975753
+7       nasnetalarge  0.974198
+5        inceptionv4  0.966715
+-        densenet169  0.965598
+8  inceptionresnetv2  0.950000
+-          resnet152  0.948542
+-        fbresnet152  0.944995
