@@ -378,8 +378,7 @@ def train_model(model_names, input_dim, data_iter, resume=False):
     return model, best_acc
 
 
-def make_submission(predictions, labels_path, submission_dir, file_name):
-    file_path = os.path.join(submission_dir, os.path.basename(file_name))
+def make_submission(predictions, labels_path, file_path):
     df_pred = pd.read_csv(labels_path)
 
     for i, c in enumerate(df_pred.columns[1:]):
@@ -427,10 +426,14 @@ def test(model, model_names, data_iter):
     # sub_outputs2 = np.around(sub_outputs2, decimals=4)
     # sub_outputs2 = np.clip(sub_outputs2, clip, 1 - clip)
 
-    make_submission(sub_outputs, 'input/sample_submission.csv', 'result',
-                    'pred-20180125-04.csv')
-    make_submission(sub_outputs2, 'input/sample_submission.csv', 'result',
-                    'pred-20180125-04-2.csv')
+    make_submission(
+        sub_outputs,
+        'input/sample_submission.csv',
+        'result/pred-20180125-04.csv', )
+    make_submission(
+        sub_outputs2,
+        'input/sample_submission.csv',
+        'result/pred-20180125-04-2.csv', )
 
 
 # data
