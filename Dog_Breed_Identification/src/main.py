@@ -23,8 +23,7 @@ from torch.optim import lr_scheduler
 # import torchvision.datasets as datasets
 # import torchvision.models as models
 import torchvision.transforms as transforms
-
-# import torchvision.utils as utils
+import torchvision.utils as utils
 
 
 class DogsDataset(data.Dataset):
@@ -121,13 +120,13 @@ def data_loader(all_data_dir, all_labels_df, img_size, batch_size):
         len(dataloaders['train'].dataset),
         len(dataloaders['valid'].dataset), len(dataloaders['test'].dataset))
 
-    # # # Get a batch of training data
-    # inputs, classes = next(iter(dataloaders['train']))
+    # Get a batch of training data
+    inputs, classes = next(iter(dataloaders['train']))
 
-    # # # Make a grid from batch
-    # out = utils.make_grid(inputs, nrow=16)
-    # imshow(out)
-    # plt.show()
+    # Make a grid from batch
+    out = utils.make_grid(inputs, nrow=16)
+    imshow(out)
+    plt.show()
 
     return dataloaders
 
@@ -140,8 +139,6 @@ def save_features_targets(model_name, data_iter):
     else:
         model = pretrainedmodels.__dict__[model_name](pretrained='imagenet')
     model.eval()
-
-    # pretrainedmodels.inceptionresnetv2()
 
     if use_gpu:
         model.cuda()
@@ -426,20 +423,17 @@ def test(model, model_names, data_iter):
     # sub_outputs2 = np.around(sub_outputs2, decimals=4)
     # sub_outputs2 = np.clip(sub_outputs2, clip, 1 - clip)
 
-    make_submission(
-        sub_outputs,
-        'input/sample_submission.csv',
-        'result/pred-20180125-04.csv', )
-    make_submission(
-        sub_outputs2,
-        'input/sample_submission.csv',
-        'result/pred-20180125-04-2.csv', )
+    make_submission(sub_outputs, sample_path, result_path)
+    make_submission(sub_outputs2, sample_path, result2_path)
 
 
 # data
 labels_path = "input/labels.csv"
 sample_path = "input/sample_submission.csv"
 stanford_lables_path = "input/stanford_lables.csv"
+result_path = "result/pred-20180125-04.csv"
+result2_path = "result/pred-20180125-04-2.csv"
+
 data_dir = "input"
 model_dir = "model"
 batch_size = 128
