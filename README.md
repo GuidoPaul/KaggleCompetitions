@@ -20,6 +20,6 @@ see [code](https://github.com/GuidoPaul/KaggleCompetitions/tree/master/Dog_Breed
 
 [Leaderboard](https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/leaderboard)
 
-> Rank: 52/4625, Top 2%
+> Rank: 42/4551, Top 1%
 
 see [code](https://github.com/GuidoPaul/KaggleCompetitions/tree/master/Toxic_Comment_Classification_Challenge/src)
