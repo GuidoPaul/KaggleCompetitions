@@ -4,7 +4,7 @@
 
 [Leaderboard](https://www.kaggle.com/c/spooky-author-identification/leaderboard)
 
-> Rank: 28/1244 (top 3%)
+> Rank: 28/1244, Top 3%
 
 see [code](https://github.com/GuidoPaul/KaggleCompetitions/tree/master/Spooky_Author_Identification/src)
 
@@ -12,6 +12,14 @@ see [code](https://github.com/GuidoPaul/KaggleCompetitions/tree/master/Spooky_Au
 
 [Leaderboard](https://www.kaggle.com/c/dog-breed-identification/leaderboard)
 
-> Rank: 1/1286 (top 1%)
+> Rank: 1/1286, Top 1%
 
 see [code](https://github.com/GuidoPaul/KaggleCompetitions/tree/master/Dog_Breed_Identification/src)
+
+## Toxic Comment Classification Challenge
+
+[Leaderboard](https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/leaderboard)
+
+> Rank: 52/4625, Top 2%
+
+see [code](https://github.com/GuidoPaul/KaggleCompetitions/tree/master/Toxic_Comment_Classification_Challenge/src)
